@@ -1,0 +1,20 @@
+{
+  "modalities": {
+    "proxemic": true,
+    "object": false,
+    "gesture": false
+  },
+  "proxemic": {
+    "close_still": { "visual": "pulse_circle", "color": "#4A90D9" },
+    "active_movement": { "visual": "particle_trail", "color": "#50C878" },
+    "retreat": { "visual": "fade_overlay", "color": "#888888" }
+  },
+  "objects": {
+    "marker_7": { "shape_class": "round_low_complexity", "visual": "blue_bright_ripple", "sound": "soft_chime" },
+    "marker_12": { "shape_class": "spiky_high_complexity", "visual": "red_dark_pulse", "sound": null }
+  },
+  "gestures": {
+    "held_smile": { "visual": "sparkle_burst", "hold_seconds": 1.5 },
+    "mouth_open": { "visual": "friendly_shape", "hold_seconds": 1.5 }
+  }
+}
