@@ -5,9 +5,38 @@
     "gesture": false
   },
   "proxemic": {
-    "close_still": { "visual": "pulse_circle", "color": "#4A90D9" },
-    "active_movement": { "visual": "particle_trail", "color": "#50C878" },
-    "retreat": { "visual": "fade_overlay", "color": "#888888" }
+    "underlay": {
+      "color": "#8FD8E8",
+      "base_opacity": 0.22,
+      "glow_softness": 6
+    },
+    "close_still": {
+      "visual": "bubble_tube",
+      "bubble_color": "#50C878",
+      "base_density": 0.5,
+      "base_rise_speed": 1.2,
+      "max_rise_speed": 5.5,
+      "min_bubble_size": 6,
+      "max_bubble_size": 22,
+      "strand_colors": ["#4A90D9", "#7FD1E0", "#B39DDB", "#4A90D9"],
+      "strand_count": 6,
+      "strand_speed": 0.4,
+      "strand_glow_size": 10
+    },
+    "active_movement": {
+      "visual": "glow_rope",
+      "strand_colors": ["#4A90D9", "#7FD1E0", "#B39DDB", "#4A90D9"],
+      "strand_count": 6,
+      "strand_speed": 0.4,
+      "strand_glow_size": 10
+    },
+    "retreat": {
+      "visual": "starry_projection",
+      "star_color": "#ffffff",
+      "star_count": 90,
+      "drift_speed": 0.3,
+      "shrink_rate": 0.6
+    }
   },
   "objects": {
     "marker_7": { "shape_class": "round_low_complexity", "visual": "blue_bright_ripple", "sound": "soft_chime" },

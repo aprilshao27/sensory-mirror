@@ -1,6 +1,7 @@
 import asyncio
 import json
 import time
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import cv2
@@ -14,7 +15,15 @@ from modules.proxemic import ProxemicDetector
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 CONTROL_PANEL_DIR = Path(__file__).parent.parent / "control_panel"
 
-app = FastAPI(title="Sensory Mirror Backend")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    asyncio.create_task(proxemic_loop())
+    asyncio.create_task(config_watch_loop())
+    yield
+
+
+app = FastAPI(title="Sensory Mirror Backend", lifespan=lifespan)
 config_manager = ConfigManager()
 
 
@@ -64,7 +73,7 @@ async def update_config(new_config: dict, note: str = ""):
 
 async def proxemic_loop():
     detector = ProxemicDetector()
-    cap = cv2.VideoCapture(0)
+    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
     try:
         while True:
             if not config_manager.config["modalities"]["proxemic"]:
@@ -76,6 +85,7 @@ async def proxemic_loop():
                 await asyncio.sleep(0.1)
                 continue
 
+            frame = cv2.flip(frame, 1)  # mirror horizontally: raw capture isn't a mirror by default
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             result = detector.process(frame_rgb)
             if result is not None:
@@ -83,6 +93,24 @@ async def proxemic_loop():
                     {
                         "modality": "proxemic",
                         "state": result["state"],
+                        "movement": result["movement"],
+                        "landmarks": result["landmarks"],
+                        "mask": result["mask"],
+                        "timestamp": time.time(),
+                    }
+                )
+            else:
+                # No pose detected at all — most commonly someone far enough
+                # away that MediaPipe can't resolve landmarks. That's the
+                # deepest form of "retreat", so say so explicitly; otherwise
+                # the frontend just freezes on whatever state it last saw.
+                await manager.broadcast(
+                    {
+                        "modality": "proxemic",
+                        "state": "retreat",
+                        "movement": 0.0,
+                        "landmarks": [],
+                        "mask": None,
                         "timestamp": time.time(),
                     }
                 )
@@ -98,12 +126,6 @@ async def config_watch_loop():
         if config_manager.has_changed():
             config_manager.reload()
             await manager.broadcast({"type": "config_update", "config": config_manager.config})
-
-
-@app.on_event("startup")
-async def startup():
-    asyncio.create_task(proxemic_loop())
-    asyncio.create_task(config_watch_loop())
 
 
 app.mount("/control", StaticFiles(directory=CONTROL_PANEL_DIR, html=True), name="control")
