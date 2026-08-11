@@ -61,6 +61,13 @@ STATE_CLOSE_STILL = "close_still"
 STATE_ACTIVE_MOVEMENT = "active_movement"
 STATE_RETREAT = "retreat"
 
+# A single frame with no detected pose is usually MediaPipe dropping tracking
+# for a moment (motion blur from fast movement, a brief occlusion) rather
+# than the person actually leaving. Require this many consecutive missed
+# frames (~0.25s at 30fps) before reporting retreat, so a normal mid-movement
+# dropout doesn't flicker the starfield in over whatever state is active.
+MISSED_FRAMES_RETREAT_THRESHOLD = 8
+
 # Mask resolution: higher keeps the silhouette edge defined once it's scaled
 # up to fill the canvas; still small enough to keep the WS payload light.
 MASK_MAX_DIM = 128
@@ -78,21 +85,34 @@ class ProxemicDetector:
         self._smoothed_movement = 0.0
         self._is_moving = False
         self._is_retreating = False
+        self._missed_frames = 0
 
     def process(self, frame_rgb) -> dict | None:
         """Returns {"state", "bbox_size", "movement", "landmarks", "mask"}
-        for the current frame, or None if no person is detected. "mask" is
-        a small, degradation-aware grayscale segmentation mask package for
-        frontend rendering; "landmarks" are normalised (x, y) pose points.
+        for the current frame, or None if the frame should be skipped (either
+        a transient tracking dropout within the grace period, or a confirmed
+        absence already reported and unchanged). "mask" is a small,
+        degradation-aware grayscale segmentation mask package for frontend
+        rendering; "landmarks" are normalised (x, y) pose points.
         """
         results = self._pose.process(frame_rgb)
         if not results.pose_landmarks:
+            self._missed_frames += 1
             self._prev_landmarks = None
             self._smoothed_movement = 0.0
             self._is_moving = False
-            self._is_retreating = False
-            return None
+            if self._missed_frames < MISSED_FRAMES_RETREAT_THRESHOLD:
+                return None
+            self._is_retreating = True
+            return {
+                "state": STATE_RETREAT,
+                "bbox_size": 0.0,
+                "movement": 0.0,
+                "landmarks": [],
+                "mask": None,
+            }
 
+        self._missed_frames = 0
         landmarks = results.pose_landmarks.landmark
         bbox_size = self._bbox_size(landmarks)
         raw_movement = self._movement_magnitude(landmarks)

@@ -7,6 +7,7 @@ from pathlib import Path
 import cv2
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
+from pygrabber.dshow_graph import FilterGraph
 from starlette.websockets import WebSocketState
 
 from config.config_manager import ConfigManager
@@ -14,6 +15,20 @@ from modules.proxemic import ProxemicDetector
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
 CONTROL_PANEL_DIR = Path(__file__).parent.parent / "control_panel"
+
+# The mirror's camera, identified by name rather than a hardcoded DirectShow
+# index — Windows inserts/removes camera-like devices (e.g. the Windows
+# Studio Effects virtual camera) into the enumeration over time, which
+# silently shifts every index after it. A name lookup survives that; a
+# hardcoded index doesn't.
+CAMERA_NAME = "Brio 100"
+
+
+def _find_camera_index(name: str, fallback: int = 0) -> int:
+    try:
+        return FilterGraph().get_input_devices().index(name)
+    except (ValueError, OSError):
+        return fallback
 
 
 @asynccontextmanager
@@ -73,7 +88,7 @@ async def update_config(new_config: dict, note: str = ""):
 
 async def proxemic_loop():
     detector = ProxemicDetector()
-    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+    cap = cv2.VideoCapture(_find_camera_index(CAMERA_NAME), cv2.CAP_DSHOW)
     try:
         while True:
             if not config_manager.config["modalities"]["proxemic"]:
@@ -99,21 +114,10 @@ async def proxemic_loop():
                         "timestamp": time.time(),
                     }
                 )
-            else:
-                # No pose detected at all — most commonly someone far enough
-                # away that MediaPipe can't resolve landmarks. That's the
-                # deepest form of "retreat", so say so explicitly; otherwise
-                # the frontend just freezes on whatever state it last saw.
-                await manager.broadcast(
-                    {
-                        "modality": "proxemic",
-                        "state": "retreat",
-                        "movement": 0.0,
-                        "landmarks": [],
-                        "mask": None,
-                        "timestamp": time.time(),
-                    }
-                )
+            # else: either a transient tracking dropout still within the
+            # detector's grace period, or a confirmed absence it already
+            # reported — skip broadcasting so the frontend keeps easing
+            # toward whatever state it last received instead of flickering.
             await asyncio.sleep(0)  # yield to event loop
     finally:
         cap.release()

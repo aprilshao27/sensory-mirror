@@ -7,17 +7,26 @@
   "proxemic": {
     "underlay": {
       "color": "#8FD8E8",
-      "base_opacity": 0.22,
-      "glow_softness": 6
+      "base_opacity": 0.16,
+      "close_still_opacity_mult": 0.35,
+      "glow_softness": 14,
+      "contour_color": "#ffffff",
+      "contour_opacity": 0.9,
+      "contour_width": 2,
+      "contour_softness": 6
     },
     "close_still": {
       "visual": "bubble_tube",
-      "bubble_color": "#50C878",
-      "base_density": 0.5,
-      "base_rise_speed": 1.2,
-      "max_rise_speed": 5.5,
+      "color_cycle": ["#4A90D9", "#9B59B6", "#E85D9E", "#FF8C42"],
+      "color_cycle_speed": 0.00025,
+      "base_density": 0.9,
+      "base_rise_speed": 1.7,
+      "max_rise_speed": 7.2,
       "min_bubble_size": 6,
       "max_bubble_size": 22,
+      "wobble_amount": 6,
+      "wobble_speed": 0.08,
+      "bubble_softness": 2,
       "strand_colors": ["#4A90D9", "#7FD1E0", "#B39DDB", "#4A90D9"],
       "strand_count": 6,
       "strand_speed": 0.4,
@@ -25,17 +34,28 @@
     },
     "active_movement": {
       "visual": "glow_rope",
+      "underlay_accent": "#FF4F81",
       "strand_colors": ["#4A90D9", "#7FD1E0", "#B39DDB", "#4A90D9"],
       "strand_count": 6,
       "strand_speed": 0.4,
-      "strand_glow_size": 10
+      "strand_glow_size": 10,
+      "strand_glow_blur": 4,
+      "movement_intensity_ref": 0.05,
+      "max_speed_mult": 2.2,
+      "max_glow_mult": 1.8
     },
     "retreat": {
       "visual": "starry_projection",
       "star_color": "#ffffff",
       "star_count": 90,
       "drift_speed": 0.3,
-      "shrink_rate": 0.6
+      "shrink_rate": 0.6,
+      "star_min_size": 3,
+      "star_max_size": 7,
+      "star_glow_size": 16,
+      "star_max_alpha": 255,
+      "star_wobble_amount": 10,
+      "star_wobble_speed": 0.15
     }
   },
   "objects": {
