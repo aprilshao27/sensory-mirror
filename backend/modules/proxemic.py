@@ -18,8 +18,13 @@ import mediapipe as mp
 import numpy as np
 
 # Tune against your actual camera distance/lighting during Phase 1 validation.
-CLOSE_BBOX_THRESHOLD = 0.6  # normalised bbox height/width fraction of frame
-RETREAT_BBOX_THRESHOLD = 0.4  # below this, the person reads as "far away"
+# Hysteresis band, not a single cutoff (same rationale as the movement
+# thresholds below): entering close_still requires clearing the higher bar;
+# once close, it takes dropping below the lower bar to read as "retreat".
+# Narrowing the gap between the two makes retreat trigger sooner (closer to
+# the mirror); widening it delays retreat until the person is farther back.
+CLOSE_BBOX_THRESHOLD = 0.7  # normalised bbox height/width fraction of frame
+RETREAT_BBOX_THRESHOLD = 0.5  # below this, the person reads as "far away"
 
 # Hysteresis band, not a single cutoff: landmark jitter alone (no real motion)
 # produces small nonzero deltas every frame, so a single threshold flickers
@@ -45,6 +50,13 @@ MOVEMENT_SMOOTHING = 0.7  # EMA alpha applied to movement before classification
 # linking them let close_still tuning silently disable this damping.
 NORMALIZATION_REFERENCE_BBOX = 0.35
 
+# MediaPipe Pose indices for nose, shoulders, hips — landmarks that stay in
+# frame at normal interaction distance. Extremities (wrists, feet) are
+# excluded: MediaPipe still emits a guessed position for them even when
+# they're outside the visible frame or occluded, and those guesses are
+# unreliable enough to blow bbox_size past the expected [0, 1] range.
+BBOX_LANDMARK_INDICES = (0, 11, 12, 23, 24)
+
 STATE_CLOSE_STILL = "close_still"
 STATE_ACTIVE_MOVEMENT = "active_movement"
 STATE_RETREAT = "retreat"
@@ -65,6 +77,7 @@ class ProxemicDetector:
         self._prev_landmarks = None
         self._smoothed_movement = 0.0
         self._is_moving = False
+        self._is_retreating = False
 
     def process(self, frame_rgb) -> dict | None:
         """Returns {"state", "bbox_size", "movement", "landmarks", "mask"}
@@ -77,6 +90,7 @@ class ProxemicDetector:
             self._prev_landmarks = None
             self._smoothed_movement = 0.0
             self._is_moving = False
+            self._is_retreating = False
             return None
 
         landmarks = results.pose_landmarks.landmark
@@ -102,8 +116,9 @@ class ProxemicDetector:
         }
 
     def _bbox_size(self, landmarks) -> float:
-        xs = [lm.x for lm in landmarks]
-        ys = [lm.y for lm in landmarks]
+        points = [landmarks[i] for i in BBOX_LANDMARK_INDICES]
+        xs = [lm.x for lm in points]
+        ys = [lm.y for lm in points]
         return max(max(xs) - min(xs), max(ys) - min(ys))
 
     def _movement_magnitude(self, landmarks) -> float:
@@ -121,11 +136,16 @@ class ProxemicDetector:
         elif movement < MOVEMENT_EXIT_THRESHOLD:
             self._is_moving = False
 
+        if bbox_size > CLOSE_BBOX_THRESHOLD:
+            self._is_retreating = False
+        elif bbox_size < RETREAT_BBOX_THRESHOLD:
+            self._is_retreating = True
+
         if self._is_moving:
             return STATE_ACTIVE_MOVEMENT
-        if bbox_size > CLOSE_BBOX_THRESHOLD:
-            return STATE_CLOSE_STILL
-        return STATE_RETREAT
+        if self._is_retreating:
+            return STATE_RETREAT
+        return STATE_CLOSE_STILL
 
     def _package_mask(self, mask, bbox_size: float) -> dict:
         h, w = mask.shape
