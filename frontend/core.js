@@ -2,10 +2,9 @@
 // specific rendering lives in modules/*.js (loaded before this file); this
 // file only wires the canvas and incoming messages to those modules.
 //
-// Only proxemic is routed below — object/gesture messages don't exist yet
-// since backend/modules/object_recognition.py and gesture.py are still
-// unimplemented stubs. Add routing here once each lands, mirroring
-// backend/main.py's lifespan (which likewise only runs proxemic_loop()).
+// Object recognition isn't routed below — backend/modules/object_recognition.py
+// is still an unimplemented stub. Add routing here once it lands, mirroring
+// backend/main.py's camera_loop (which likewise skips it for now).
 
 let ws;
 let config = null;
@@ -26,6 +25,8 @@ function connectSocket() {
       config = msg.config;
     } else if (msg.modality === "proxemic") {
       Proxemic.handleMessage(msg);
+    } else if (msg.modality === "gesture") {
+      Gesture.handleMessage(msg);
     }
   };
 
@@ -35,8 +36,10 @@ function connectSocket() {
 function draw() {
   background(0);
   Proxemic.update();
+  Gesture.update();
   if (!config) return;
   Proxemic.draw(config.proxemic);
+  Gesture.draw(config.gestures);
 }
 
 function windowResized() {

@@ -11,6 +11,7 @@ from pygrabber.dshow_graph import FilterGraph
 from starlette.websockets import WebSocketState
 
 from config.config_manager import ConfigManager
+from modules.gesture import GestureDetector
 from modules.proxemic import ProxemicDetector
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -33,7 +34,7 @@ def _find_camera_index(name: str, fallback: int = 0) -> int:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    asyncio.create_task(proxemic_loop())
+    asyncio.create_task(camera_loop())
     asyncio.create_task(config_watch_loop())
     yield
 
@@ -78,6 +79,12 @@ async def websocket_endpoint(ws: WebSocket):
         manager.disconnect(ws)
 
 
+@app.get("/api/config")
+async def get_config():
+    """Used by the control panel to load current modality/content state on open."""
+    return config_manager.config
+
+
 @app.post("/api/config")
 async def update_config(new_config: dict, note: str = ""):
     """Used by the Phase 4 control panel to edit content mappings live."""
@@ -86,12 +93,26 @@ async def update_config(new_config: dict, note: str = ""):
     return {"status": "ok", "config": config_manager.config}
 
 
-async def proxemic_loop():
-    detector = ProxemicDetector()
+async def camera_loop():
+    """Single shared camera capture feeding whichever one modality is
+    currently active. Exactly one of "proxemic" / "gesture" / "object" (or
+    None) is active at a time — config_manager.config["active_modality"] —
+    enforced by construction rather than by convention, since three
+    independent on/off flags could otherwise end up with more than one true
+    at once (a hand-edited config file, two control panel tabs racing each
+    other, etc). DSHOW also won't let two independent VideoCapture handles
+    share one physical camera, so a single shared loop is required either way.
+    Object recognition isn't handled here yet — Phase 2 is still a stub
+    pending marker materials — but plugs in the same way once ready.
+    """
+    proxemic = ProxemicDetector()
+    gesture = GestureDetector()
+    gesture_was_active = False
     cap = cv2.VideoCapture(_find_camera_index(CAMERA_NAME), cv2.CAP_DSHOW)
     try:
         while True:
-            if not config_manager.config["modalities"]["proxemic"]:
+            active = config_manager.config["active_modality"]
+            if active not in ("proxemic", "gesture"):
                 await asyncio.sleep(0.2)
                 continue
 
@@ -102,26 +123,53 @@ async def proxemic_loop():
 
             frame = cv2.flip(frame, 1)  # mirror horizontally: raw capture isn't a mirror by default
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            result = detector.process(frame_rgb)
-            if result is not None:
-                await manager.broadcast(
-                    {
-                        "modality": "proxemic",
-                        "state": result["state"],
-                        "movement": result["movement"],
-                        "landmarks": result["landmarks"],
-                        "mask": result["mask"],
-                        "timestamp": time.time(),
-                    }
-                )
-            # else: either a transient tracking dropout still within the
-            # detector's grace period, or a confirmed absence it already
-            # reported — skip broadcasting so the frontend keeps easing
-            # toward whatever state it last received instead of flickering.
+
+            if active == "proxemic":
+                result = proxemic.process(frame_rgb)
+                if result is not None:
+                    await manager.broadcast(
+                        {
+                            "modality": "proxemic",
+                            "state": result["state"],
+                            "movement": result["movement"],
+                            "landmarks": result["landmarks"],
+                            "mask": result["mask"],
+                            "timestamp": time.time(),
+                        }
+                    )
+                # else: either a transient tracking dropout still within the
+                # detector's grace period, or a confirmed absence it already
+                # reported — skip broadcasting so the frontend keeps easing
+                # toward whatever state it last received instead of flickering.
+
+            gesture_active = active == "gesture"
+            if gesture_active and not gesture_was_active:
+                # Discard any hold timer left over from before this was last
+                # active — otherwise the next frame reads its stale elapsed
+                # time as an already-complete hold and false-triggers.
+                gesture.reset()
+            gesture_was_active = gesture_active
+
+            if gesture_active:
+                result = gesture.process(frame_rgb)
+                if result is not None:
+                    await manager.broadcast(
+                        {
+                            "modality": "gesture",
+                            "gesture_type": result["gesture_type"],
+                            "hold_progress": result["hold_progress"],
+                            "triggered": result["triggered"],
+                            "width_ratio": result["width_ratio"],
+                            "open_ratio": result["open_ratio"],
+                            "timestamp": time.time(),
+                        }
+                    )
+
             await asyncio.sleep(0)  # yield to event loop
     finally:
         cap.release()
-        detector.close()
+        proxemic.close()
+        gesture.close()
 
 
 async def config_watch_loop():

@@ -1,9 +1,5 @@
 {
-  "modalities": {
-    "proxemic": true,
-    "object": false,
-    "gesture": false
-  },
+  "active_modality": "gesture",
   "proxemic": {
     "underlay": {
       "color": "#8FD8E8",
@@ -17,7 +13,12 @@
     },
     "close_still": {
       "visual": "bubble_tube",
-      "color_cycle": ["#4A90D9", "#9B59B6", "#E85D9E", "#FF8C42"],
+      "color_cycle": [
+        "#4A90D9",
+        "#9B59B6",
+        "#E85D9E",
+        "#FF8C42"
+      ],
       "color_cycle_speed": 0.00025,
       "base_density": 0.9,
       "base_rise_speed": 1.7,
@@ -27,7 +28,12 @@
       "wobble_amount": 6,
       "wobble_speed": 0.08,
       "bubble_softness": 2,
-      "strand_colors": ["#4A90D9", "#7FD1E0", "#B39DDB", "#4A90D9"],
+      "strand_colors": [
+        "#4A90D9",
+        "#7FD1E0",
+        "#B39DDB",
+        "#4A90D9"
+      ],
       "strand_count": 6,
       "strand_speed": 0.4,
       "strand_glow_size": 10
@@ -35,7 +41,12 @@
     "active_movement": {
       "visual": "glow_rope",
       "underlay_accent": "#FF4F81",
-      "strand_colors": ["#4A90D9", "#7FD1E0", "#B39DDB", "#4A90D9"],
+      "strand_colors": [
+        "#4A90D9",
+        "#7FD1E0",
+        "#B39DDB",
+        "#4A90D9"
+      ],
       "strand_count": 6,
       "strand_speed": 0.4,
       "strand_glow_size": 10,
@@ -59,11 +70,52 @@
     }
   },
   "objects": {
-    "marker_7": { "shape_class": "round_low_complexity", "visual": "blue_bright_ripple", "sound": "soft_chime" },
-    "marker_12": { "shape_class": "spiky_high_complexity", "visual": "red_dark_pulse", "sound": null }
+    "marker_0": {
+      "item": "Weighted Cat Plush (test item)",
+      "visual": "simple_cat_animation",
+      "sound": null
+    },
+    "marker_1": {
+      "item": "Pop It Squishy Ball Fidget",
+      "visual": "adaptive_pastel_ripple",
+      "sound": "soft_chime"
+    },
+    "marker_2": {
+      "item": "Noomi Squeezibo Fabric Squishy",
+      "visual": "virtual_pet_companion",
+      "sound": "gentle_affirmation"
+    },
+    "marker_3": {
+      "item": "Hand Caterpillar Fidget",
+      "visual": "segmented_light_wave",
+      "sound": null
+    }
   },
   "gestures": {
-    "held_smile": { "visual": "sparkle_burst", "hold_seconds": 1.5 },
-    "mouth_open": { "visual": "friendly_shape", "hold_seconds": 1.5 }
+    "held_smile": {
+      "sparkle_colors": [
+        "#FFD966",
+        "#FF8FD6",
+        "#8FE3FF"
+      ],
+      "max_ambient_sparkles": 40,
+      "sparkle_min_size": 3,
+      "sparkle_max_size": 9,
+      "burst_sparkle_count": 70,
+      "burst_speed_min": 3,
+      "burst_speed_max": 9,
+      "sound": "chime"
+    },
+    "mouth_open": {
+      "edge_color": "#FF6B6B",
+      "edge_max_opacity": 0.5,
+      "edge_thickness": 90,
+      "edge_blur": 40,
+      "tension_shake_amount": 4,
+      "character_color": "#FFB84D",
+      "character_accent_color": "#3B2A1A",
+      "character_size": 130,
+      "sound": "boing"
+    }
   }
 }
