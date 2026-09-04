@@ -335,9 +335,10 @@ const ObjectModule = (() => {
   // emanate from the marker's live position and travel outward with it, and
   // a small marbled "aura" sits at the core. What makes each ball read
   // differently is purely its own ball_color_primary/secondary/tertiary in
-  // content_config.json, cycled through as rings age rather than tied to
-  // any literal geometry, so it reads as "this ball's colours in motion"
-  // rather than a picture of the ball itself.
+  // content_config.json — sampled straight from the real toy's photos (see
+  // backend/dataset/raw/*_pop_it/*.jpg) — cycled through as rings age
+  // rather than tied to any literal geometry, so it reads as "this ball's
+  // colours in motion" rather than a picture of the ball itself.
   //
   // Both the ring spawn rate and the aura's energy track how vigorously the
   // marker has been moving (recentSpeed), so a still ball settles into a
@@ -387,11 +388,14 @@ const ObjectModule = (() => {
     drawingContext.filter = "none";
     blendMode(BLEND);
 
-    // Marbled core aura: a handful of soft, drifting colour blobs orbiting
-    // the current position — an abstract stand-in for the ball's tie-dye
-    // marbling, not a literal render of it.
+    // Core aura: a handful of soft, drifting blobs orbiting the current
+    // position, all in the ball's own primary colour — so the one visual
+    // element that's always right on the marker (as opposed to the ripples
+    // above, which travel outward and fade) reads as a stable, recognisable
+    // "this is that ball" colour rather than cycling through its palette.
     const coreSize = cfg.core_size ?? 46;
     const auraLayers = cfg.aura_layers ?? 5;
+    const primary = palette[0];
     noStroke();
     blendMode(ADD);
     drawingContext.filter = `blur(${coreSize * 0.35}px)`;
@@ -400,8 +404,7 @@ const ObjectModule = (() => {
       const orbit = coreSize * 0.28 * (0.4 + 0.6 * noise(i * 3, now * 0.0006));
       const px = state.smoothX + Math.cos(angle) * orbit;
       const py = state.smoothY + Math.sin(angle) * orbit;
-      const c = paletteColorAt(palette, noise(i * 1.7, now * 0.0003) * palette.length);
-      fill(red(c), green(c), blue(c), state.presence * 130);
+      fill(red(primary), green(primary), blue(primary), state.presence * 130);
       circle(px, py, coreSize * lerp(0.6, 1, state.rippleEnergy));
     }
     drawingContext.filter = "none";
