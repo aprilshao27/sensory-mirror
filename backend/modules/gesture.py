@@ -17,6 +17,7 @@ how close an expression gets without editing code and guessing blind.
 import time
 
 import mediapipe as mp
+from mediapipe.python.solutions import face_mesh_connections as _fmc
 
 # Tune against real camera/lighting during Phase 3 validation, same as
 # proxemic's thresholds. Starting points below are set from rough
@@ -33,6 +34,27 @@ MOUTH_LEFT = 61
 MOUTH_RIGHT = 291
 MOUTH_INNER_TOP = 13
 MOUTH_INNER_BOTTOM = 14
+
+
+def _unique_indices(connections) -> list[int]:
+    """Flattens a FACEMESH_* connection set (pairs of landmark indices
+    forming its outline edges) into the distinct point indices it touches.
+    Order doesn't matter — the frontend builds a convex hull from these, not
+    an edge-ordered path — so this doesn't need to trace the topology.
+    """
+    return sorted({idx for edge in connections for idx in edge})
+
+
+# Point sets for the frontend's per-feature soft underlay (eyes/nose/mouth
+# glow, styled after proxemic's body-silhouette underlay). Reuses the same
+# 468-point face mesh already computed for gesture classification above, so
+# this is just a slice of the existing landmarks, not extra detection work.
+FACE_FEATURE_INDICES = {
+    "left_eye": _unique_indices(_fmc.FACEMESH_LEFT_EYE),
+    "right_eye": _unique_indices(_fmc.FACEMESH_RIGHT_EYE),
+    "nose": _unique_indices(_fmc.FACEMESH_NOSE),
+    "mouth": _unique_indices(_fmc.FACEMESH_LIPS),
+}
 
 # Ratios are normalised against interocular distance so they hold steady
 # across camera distance, and measured in true pixel space (landmark.x/.y
@@ -85,11 +107,11 @@ class GestureDetector:
 
     def process(self, frame_rgb) -> dict | None:
         """Returns {"gesture_type", "hold_progress", "triggered",
-        "width_ratio", "open_ratio"} for the current frame, or None if the
-        frame should be skipped (a transient tracking dropout still within
-        the grace period). gesture_type/ratios are None when no face is
-        tracked; gesture_type is otherwise None whenever the tracked face
-        isn't currently forming either gesture.
+        "width_ratio", "open_ratio", "face_landmarks"} for the current frame,
+        or None if the frame should be skipped (a transient tracking dropout
+        still within the grace period). gesture_type/ratios/face_landmarks
+        are None when no face is tracked; gesture_type is otherwise None
+        whenever the tracked face isn't currently forming either gesture.
         """
         h, w = frame_rgb.shape[:2]
         results = self._mesh.process(frame_rgb)
@@ -117,12 +139,18 @@ class GestureDetector:
             if just_triggered:
                 self._triggered = True
 
+        face_landmarks = {
+            feature: [{"x": landmarks[i].x, "y": landmarks[i].y} for i in indices]
+            for feature, indices in FACE_FEATURE_INDICES.items()
+        }
+
         return {
             "gesture_type": gesture,
             "hold_progress": hold_progress,
             "triggered": just_triggered,
             "width_ratio": round(width_ratio, 3),
             "open_ratio": round(open_ratio, 3),
+            "face_landmarks": face_landmarks,
         }
 
     def reset(self) -> dict:
@@ -142,6 +170,7 @@ class GestureDetector:
             "triggered": False,
             "width_ratio": None,
             "open_ratio": None,
+            "face_landmarks": None,
         }
 
     def _classify(self, landmarks, frame_w: int, frame_h: int) -> tuple[str | None, float, float]:

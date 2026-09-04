@@ -17,16 +17,23 @@ const Gesture = (() => {
 
   let pendingTrigger = null; // gesture_type of a just-triggered payoff, consumed on the next draw()
 
-  let ambientSparkles = []; // builds during a held_smile hold
-  let burstSparkles = []; // one-shot payoff burst
+  let faceLandmarks = null; // {left_eye, right_eye, nose, mouth}: normalised [0,1] points, or null when no face tracked
+  let facePresence = 0; // eases toward 1 while a face is tracked, 0 while not — smooths the underlay's appear/disappear
+  const FACE_PRESENCE_SMOOTHING = 0.12;
+
+  let smileFlash = 0; // one-shot bright pulse on the held_smile payoff, decays each frame
 
   let character = null; // jack-in-the-box popup state, or null when off screen
 
   // Temporary calibration aid: shows the live width_ratio/open_ratio the
   // backend is comparing against its thresholds (see gesture.py), since
-  // those were set from rough estimates, not a live camera. Safe to delete
-  // this block (and its draw call below) once the thresholds are confirmed
-  // to trigger reliably.
+  // those were set from rough estimates, not a live camera. Only drawn while
+  // gesture is the active modality (see draw() below) — this module's draw()
+  // still runs every frame regardless of active_modality, same as
+  // Proxemic/ObjectModule, so without that gate this overlay would sit on
+  // top of the other modalities too. Safe to delete this whole block (and
+  // its draw call below) once the thresholds are confirmed to trigger
+  // reliably.
   const DEBUG_OVERLAY = true;
   let lastDebug = { width_ratio: null, open_ratio: null };
 
@@ -36,10 +43,11 @@ const Gesture = (() => {
     rawProgress = msg.hold_progress ?? 0;
     lastDebug = { width_ratio: msg.width_ratio ?? null, open_ratio: msg.open_ratio ?? null };
     if (msg.triggered) pendingTrigger = activeType;
+    faceLandmarks = msg.face_landmarks ?? null;
   }
 
-  function drawDebugOverlay() {
-    if (!DEBUG_OVERLAY) return;
+  function drawDebugOverlay(activeModality) {
+    if (!DEBUG_OVERLAY || activeModality !== "gesture") return;
     const wr = lastDebug.width_ratio;
     const or_ = lastDebug.open_ratio;
     const line1 = `gesture: ${activeType ?? "none"}  hold: ${(smoothProgress * 100).toFixed(0)}%`;
@@ -64,124 +72,174 @@ const Gesture = (() => {
       smoothProgress = 0;
       displayType = null;
     }
+    facePresence += ((faceLandmarks ? 1 : 0) - facePresence) * FACE_PRESENCE_SMOOTHING;
   }
 
-  function draw(cfg) {
+  function draw(cfg, activeModality) {
     if (!cfg) return;
 
     if (pendingTrigger === "held_smile") {
-      triggerSmileBurst(cfg.held_smile);
+      triggerSmileFlash(cfg.held_smile);
       pendingTrigger = null;
     } else if (pendingTrigger === "mouth_open") {
       triggerCharacterPopup();
       pendingTrigger = null;
     }
 
+    drawSkyWash(cfg.held_smile);
+    drawFaceUnderlay(cfg.face_underlay);
     drawHeldSmile(cfg.held_smile);
     drawMouthOpen(cfg.mouth_open);
-    drawDebugOverlay();
+    drawDebugOverlay(activeModality);
   }
 
-  // ---- held_smile: ambient sparkle build -> burst + chime ----------------
+  // ---- face_underlay: soft eye/nose/mouth glow (styled after proxemic's
+  // body-silhouette underlay) ------------------------------------------------
 
-  function spawnAmbientSparkle(cfg) {
-    const colors = cfg.sparkle_colors ?? ["#FFD966"];
-    const cx = width / 2;
-    const cy = height / 2;
-    // Averaging three random samples biases spawns toward the center
-    // (roughly where a face fills the mirror) without needing real face
-    // position — this module only gets gesture_type/hold_progress, not
-    // landmarks.
-    const bx = (random() + random() + random()) / 3;
-    const by = (random() + random() + random()) / 3;
-    return {
-      x: cx + (bx - 0.5) * width * 0.8,
-      y: cy + (by - 0.5) * height * 0.8,
-      size: random(cfg.sparkle_min_size ?? 3, cfg.sparkle_max_size ?? 9),
-      col: color(random(colors)),
-      twinklePhase: random(TWO_PI),
-      twinkleSpeed: random(0.06, 0.12),
-    };
+  // Landmarks arrive unordered per feature (see gesture.py) — a convex hull
+  // is enough to get a soft, recognisable eye/nose/mouth blob without needing
+  // the mesh's exact edge topology, and reuses the same hull/expand helpers
+  // proxemic already uses for its glow-rope body outline.
+  function computeFeatureHull(points) {
+    if (!points || points.length < 3) return [];
+    const pts = points.map((p) => ({ x: p.x * width, y: p.y * height }));
+    const hull = convexHull(pts);
+    if (hull.length < 3) return [];
+    // A looser expansion than proxemic's body hull (1.3) reads as a diffuse
+    // aura around the feature rather than a tight, sticker-like trace of it
+    // — softer and less literal.
+    return expandHull(hull, 1.4);
   }
 
-  function drawHeldSmile(cfg) {
-    if (!cfg) return;
+  // Slow, gently asynchronous "breathing" so the four blobs feel alive
+  // rather than a static overlay — each feature gets its own phase offset
+  // so they drift in and out of sync instead of pulsing together.
+  function breathe(phase) {
+    return 1 + 0.12 * Math.sin(millis() * 0.0009 + phase);
+  }
 
-    // Ambient sparkles only build/persist while held_smile is the
-    // (possibly fading-out) displayed gesture; the count target tracks
-    // smoothProgress directly so it grows during the hold and shrinks back
-    // out smoothly if released early, rather than an abrupt clear.
-    const targetCount = displayType === "held_smile" ? Math.floor((cfg.max_ambient_sparkles ?? 40) * smoothProgress) : 0;
-    while (ambientSparkles.length < targetCount) {
-      ambientSparkles.push(spawnAmbientSparkle(cfg));
-    }
-    while (ambientSparkles.length > targetCount) {
-      ambientSparkles.pop();
-    }
+  // Soft layered-blur-pass fill, same technique as proxemic's silhouette
+  // underlay but applied to a small per-feature hull instead of a full-body
+  // segmentation mask. No hard contour stroke — at this size a crisp edge
+  // reads as a sticker outline rather than a soft glow, so definition comes
+  // entirely from the blur falloff.
+  function drawFeatureBlob(hull, fillColor, opacity, cfg) {
+    if (hull.length < 3 || opacity <= 0.001) return;
+    const softness = cfg.softness ?? 16;
 
+    push();
     noStroke();
     blendMode(ADD);
-    for (const s of ambientSparkles) {
-      s.twinklePhase += s.twinkleSpeed;
-      const twinkle = 0.4 + 0.6 * (0.5 + 0.5 * sin(s.twinklePhase));
-      const alpha = twinkle * smoothProgress * 220;
-      drawSparkle(s.x, s.y, s.size, s.col, alpha);
+    const layers = [
+      { blur: softness * 0.5, alpha: opacity * 0.55 },
+      { blur: softness * 1.4, alpha: opacity * 0.35 },
+      { blur: softness * 3.2, alpha: opacity * 0.2 },
+    ];
+    for (const layer of layers) {
+      drawingContext.filter = `blur(${layer.blur}px)`;
+      fill(red(fillColor), green(fillColor), blue(fillColor), layer.alpha * 255);
+      beginShape();
+      for (const p of hull) vertex(p.x, p.y);
+      endShape(CLOSE);
     }
-
-    for (let i = burstSparkles.length - 1; i >= 0; i--) {
-      const s = burstSparkles[i];
-      s.x += s.vx;
-      s.y += s.vy;
-      s.vx *= 0.97;
-      s.vy *= 0.97;
-      s.life -= 0.018;
-      if (s.life <= 0) {
-        burstSparkles.splice(i, 1);
-        continue;
-      }
-      drawSparkle(s.x, s.y, s.size * s.life, s.col, s.life * 255);
-    }
+    drawingContext.filter = "none";
     blendMode(BLEND);
-  }
-
-  // Four-point star glyph reads as "sparkle" more clearly than a plain dot.
-  function drawSparkle(x, y, size, col, alpha) {
-    if (alpha <= 1) return;
-    push();
-    translate(x, y);
-    fill(red(col), green(col), blue(col), alpha);
-    beginShape();
-    for (let i = 0; i < 8; i++) {
-      const r = i % 2 === 0 ? size : size * 0.35;
-      const a = (PI / 4) * i;
-      vertex(cos(a) * r, sin(a) * r);
-    }
-    endShape(CLOSE);
     pop();
   }
 
-  function triggerSmileBurst(cfg) {
-    const cfgS = cfg ?? {};
-    const colors = cfgS.sparkle_colors ?? ["#FFD966"];
-    const count = cfgS.burst_sparkle_count ?? 70;
-    const speedMin = cfgS.burst_speed_min ?? 3;
-    const speedMax = cfgS.burst_speed_max ?? 9;
-    const cx = width / 2;
-    const cy = height / 2;
-    for (let i = 0; i < count; i++) {
-      const angle = random(TWO_PI);
-      const speed = random(speedMin, speedMax);
-      burstSparkles.push({
-        x: cx,
-        y: cy,
-        vx: cos(angle) * speed,
-        vy: sin(angle) * speed,
-        size: random(cfgS.sparkle_min_size ?? 3, cfgS.sparkle_max_size ?? 9) * 1.4,
-        col: color(random(colors)),
-        life: 1,
-      });
-    }
-    ambientSparkles = []; // the burst replaces the ambient build-up
+  const FACE_UNDERLAY_PHASES = { left_eye: 0, right_eye: 1.7, nose: 3.4, mouth: 5.1 };
+
+  function drawFaceUnderlay(cfg) {
+    if (!cfg || facePresence < 0.01 || !faceLandmarks) return;
+
+    const baseColor = color(cfg.color ?? "#8FD8E8");
+    const eyeAccent = color(cfg.eye_accent ?? cfg.color ?? "#8FD8E8");
+    const mouthAccent = color(cfg.mouth_accent ?? cfg.color ?? "#8FD8E8");
+    const baseOpacity = (cfg.opacity ?? 0.13) * facePresence;
+
+    // held_smile/mouth_open progress gently warms the relevant feature
+    // toward its accent colour rather than fully replacing it, so the
+    // "engaged" cue stays a tint, not a colour swap.
+    const smileProgress = displayType === "held_smile" ? smoothProgress : 0;
+    const mouthOpenProgress = displayType === "mouth_open" ? smoothProgress : 0;
+
+    const eyeColor = lerpColor(baseColor, eyeAccent, smileProgress * 0.6);
+    const eyeOpacity = baseOpacity * lerp(1, 1.3, smileProgress);
+    const mouthColor = lerpColor(baseColor, mouthAccent, mouthOpenProgress * 0.6);
+    const mouthOpacity = baseOpacity * lerp(1, 1.3, mouthOpenProgress);
+
+    drawFeatureBlob(
+      computeFeatureHull(faceLandmarks.left_eye),
+      eyeColor,
+      eyeOpacity * breathe(FACE_UNDERLAY_PHASES.left_eye),
+      cfg
+    );
+    drawFeatureBlob(
+      computeFeatureHull(faceLandmarks.right_eye),
+      eyeColor,
+      eyeOpacity * breathe(FACE_UNDERLAY_PHASES.right_eye),
+      cfg
+    );
+    drawFeatureBlob(
+      computeFeatureHull(faceLandmarks.nose),
+      baseColor,
+      baseOpacity * breathe(FACE_UNDERLAY_PHASES.nose),
+      cfg
+    );
+    drawFeatureBlob(
+      computeFeatureHull(faceLandmarks.mouth),
+      mouthColor,
+      mouthOpacity * breathe(FACE_UNDERLAY_PHASES.mouth),
+      cfg
+    );
+  }
+
+  // ---- held_smile: calming sky-blue wash -> bright flash + chime ---------
+
+  // Fills the whole canvas with a soft vertical gradient (deeper blue up top,
+  // pale near the "horizon") that eases in with hold progress and back out
+  // if the smile is released early — a full-frame mood shift rather than a
+  // localized effect. Drawn before the face underlay/mouth_open layers so
+  // it sits behind them as a true background rather than a tint on top.
+  function drawSkyWash(cfg) {
+    if (!cfg) return;
+    const progress = displayType === "held_smile" ? smoothProgress : 0;
+    if (progress <= 0.001) return;
+
+    const topColor = color(cfg.sky_color_top ?? "#4A90D9");
+    const horizonColor = color(cfg.sky_color_horizon ?? "#BFEFFF");
+    const opacity = (cfg.sky_max_opacity ?? 0.85) * progress;
+
+    push();
+    noStroke();
+    const grad = drawingContext.createLinearGradient(0, 0, 0, height);
+    grad.addColorStop(0, `rgba(${red(topColor)}, ${green(topColor)}, ${blue(topColor)}, ${opacity})`);
+    grad.addColorStop(1, `rgba(${red(horizonColor)}, ${green(horizonColor)}, ${blue(horizonColor)}, ${opacity})`);
+    drawingContext.fillStyle = grad;
+    rect(0, 0, width, height);
+    pop();
+  }
+
+  // The payoff on trigger: a brief bright overlay that decays back into the
+  // steady sky wash, giving the hold a distinct "moment" without sparkles.
+  function drawHeldSmile(cfg) {
+    if (!cfg || smileFlash <= 0.001) return;
+
+    const flashColor = color(cfg.flash_color ?? "#FFFFFF");
+    const maxOpacity = cfg.flash_max_opacity ?? 0.45;
+
+    push();
+    noStroke();
+    fill(red(flashColor), green(flashColor), blue(flashColor), smileFlash * maxOpacity * 255);
+    rect(0, 0, width, height);
+    pop();
+
+    smileFlash *= cfg.flash_decay ?? 0.9;
+    if (smileFlash < 0.01) smileFlash = 0;
+  }
+
+  function triggerSmileFlash(cfg) {
+    smileFlash = 1;
     SensoryAudio.playChime();
   }
 

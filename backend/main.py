@@ -12,6 +12,7 @@ from starlette.websockets import WebSocketState
 
 from config.config_manager import ConfigManager
 from modules.gesture import GestureDetector
+from modules.object_recognition import ObjectRecognitionDetector
 from modules.proxemic import ProxemicDetector
 
 FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
@@ -102,17 +103,16 @@ async def camera_loop():
     at once (a hand-edited config file, two control panel tabs racing each
     other, etc). DSHOW also won't let two independent VideoCapture handles
     share one physical camera, so a single shared loop is required either way.
-    Object recognition isn't handled here yet — Phase 2 is still a stub
-    pending marker materials — but plugs in the same way once ready.
     """
     proxemic = ProxemicDetector()
     gesture = GestureDetector()
+    object_recognition = ObjectRecognitionDetector()
     gesture_was_active = False
     cap = cv2.VideoCapture(_find_camera_index(CAMERA_NAME), cv2.CAP_DSHOW)
     try:
         while True:
             active = config_manager.config["active_modality"]
-            if active not in ("proxemic", "gesture"):
+            if active not in ("proxemic", "gesture", "object"):
                 await asyncio.sleep(0.2)
                 continue
 
@@ -161,15 +161,27 @@ async def camera_loop():
                             "triggered": result["triggered"],
                             "width_ratio": result["width_ratio"],
                             "open_ratio": result["open_ratio"],
+                            "face_landmarks": result["face_landmarks"],
                             "timestamp": time.time(),
                         }
                     )
+
+            if active == "object":
+                result = object_recognition.process(frame_rgb)
+                await manager.broadcast(
+                    {
+                        "modality": "object",
+                        "markers": result["markers"],
+                        "timestamp": time.time(),
+                    }
+                )
 
             await asyncio.sleep(0)  # yield to event loop
     finally:
         cap.release()
         proxemic.close()
         gesture.close()
+        object_recognition.close()
 
 
 async def config_watch_loop():

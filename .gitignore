@@ -4,3 +4,19 @@ __pycache__/
 venv/
 backend/logs/*.log
 .DS_Store
+
+# Object recognition dataset/training artifacts — large and regenerable via
+# backend/scripts/prepare_dataset.py + backend/scripts/train_object_model.py.
+# Exception: the hand-drawn YOLO labels under raw/<class>/*.txt (+ classes.txt)
+# are small and irreplaceable (manual annotation work), so those stay tracked
+# — only the raw photos and the regenerated trainval/test/preview output are
+# ignored.
+backend/dataset/*
+!backend/dataset/raw/
+backend/dataset/raw/*/*.jpg
+backend/dataset/raw/*/*.jpeg
+backend/dataset/raw/*/*.JPG
+backend/dataset/raw/*/*.png
+backend/models/
+backend/runs/
+yolo11s.pt

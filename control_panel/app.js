@@ -3,10 +3,8 @@
 // change is logged server-side with a timestamp — see config_manager.py).
 // Exactly one of "proxemic" / "gesture" / "object" is active at a time —
 // enforced by the backend's active_modality field, not just this radio UI.
-// Object recognition's radio stays disabled in index.html: Phase 2 is still
-// an unimplemented stub with no marker materials yet.
 
-const SELECTABLE_MODALITIES = ["proxemic", "gesture"];
+const SELECTABLE_MODALITIES = ["proxemic", "gesture", "object"];
 
 let config = null;
 const statusEl = document.getElementById("status");
