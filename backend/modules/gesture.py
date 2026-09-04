@@ -49,11 +49,15 @@ def _unique_indices(connections) -> list[int]:
 # glow, styled after proxemic's body-silhouette underlay). Reuses the same
 # 468-point face mesh already computed for gesture classification above, so
 # this is just a slice of the existing landmarks, not extra detection work.
+# face_oval additionally gives held_smile's bloom ring/flowers a hull to grow
+# from that traces the participant's own facial outline, not an arbitrary
+# screen-centered shape.
 FACE_FEATURE_INDICES = {
     "left_eye": _unique_indices(_fmc.FACEMESH_LEFT_EYE),
     "right_eye": _unique_indices(_fmc.FACEMESH_RIGHT_EYE),
     "nose": _unique_indices(_fmc.FACEMESH_NOSE),
     "mouth": _unique_indices(_fmc.FACEMESH_LIPS),
+    "face_oval": _unique_indices(_fmc.FACEMESH_FACE_OVAL),
 }
 
 # Ratios are normalised against interocular distance so they hold steady

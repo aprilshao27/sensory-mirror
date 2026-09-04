@@ -48,23 +48,15 @@ const SensoryAudio = (() => {
     playTone({ freq: 1318.51, duration: 0.5, type: "sine", startGain: 0.15, delay: 0.12 });
   }
 
-  // Mouth-open payoff: sawtooth with a fast downward pitch sweep, kazoo-honk-ish.
-  function playBoing() {
-    const audioCtx = getContext();
-    const t0 = audioCtx.currentTime;
-    const duration = 0.4;
-    const osc = audioCtx.createOscillator();
-    const gain = audioCtx.createGain();
-    osc.type = "sawtooth";
-    osc.frequency.setValueAtTime(520, t0);
-    osc.frequency.exponentialRampToValueAtTime(140, t0 + duration);
-    gain.gain.setValueAtTime(0.001, t0);
-    gain.gain.linearRampToValueAtTime(0.22, t0 + 0.03);
-    gain.gain.exponentialRampToValueAtTime(0.001, t0 + duration);
-    osc.connect(gain).connect(audioCtx.destination);
-    osc.start(t0);
-    osc.stop(t0 + duration + 0.05);
+  // Mouth-open payoff: upbeat "ta-da" — a short anticipatory note followed by
+  // a bright sustained major chord — reads as a cheer/fanfare instead of the
+  // old downward-sweep honk, matching the reframe from startle to celebration.
+  function playCheer() {
+    playTone({ freq: 523.25, duration: 0.15, type: "triangle", startGain: 0.22 });
+    playTone({ freq: 659.25, duration: 0.5, type: "triangle", startGain: 0.22, delay: 0.15 });
+    playTone({ freq: 783.99, duration: 0.5, type: "triangle", startGain: 0.18, delay: 0.15 });
+    playTone({ freq: 1046.5, duration: 0.6, type: "triangle", startGain: 0.15, delay: 0.17 });
   }
 
-  return { playChime, playBoing };
+  return { playChime, playCheer };
 })();
