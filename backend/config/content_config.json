@@ -71,18 +71,7 @@
   },
   "objects": {
     "marker_0": {
-      "item": "Black Cat Plush (test item)",
-      "visual": "simple_cat_animation",
-      "sound": null,
-      "color": "#0d0d0d",
-      "eye_ring_color": "#E8B23D",
-      "nose_color": "#9a9a9a",
-      "whisker_color": "#d9d9d9",
-      "size": 120,
-      "alert_speed_ref": 0.4
-    },
-    "marker_1": {
-      "item": "Pop It Squishy Ball \u2014 magenta/pink (reference colour, confirm on arrival)",
+      "item": "Pop It Squishy Ball \u2014 magenta/pink",
       "visual": "adaptive_colour_ripple",
       "sound": "soft_chime",
       "ball_color_primary": "#E619B0",
@@ -99,8 +88,8 @@
       "core_size": 46,
       "aura_layers": 5
     },
-    "marker_2": {
-      "item": "Pop It Squishy Ball \u2014 cyan/pastel multi (reference colour, confirm on arrival)",
+    "marker_1": {
+      "item": "Pop It Squishy Ball \u2014 cyan/pastel multi",
       "visual": "adaptive_colour_ripple",
       "sound": "soft_chime",
       "ball_color_primary": "#7FD8E8",
@@ -117,8 +106,8 @@
       "core_size": 46,
       "aura_layers": 5
     },
-    "marker_3": {
-      "item": "Pop It Squishy Ball \u2014 mint/red/blue (reference colour, confirm on arrival)",
+    "marker_2": {
+      "item": "Pop It Squishy Ball \u2014 blue/white/red",
       "visual": "adaptive_colour_ripple",
       "sound": "soft_chime",
       "ball_color_primary": "#8FF0D6",
@@ -135,7 +124,7 @@
       "core_size": 46,
       "aura_layers": 5
     },
-    "marker_4": {
+    "marker_3": {
       "item": "Noomi Squeezibo Fabric Squishy (purple cat)",
       "visual": "virtual_pet_companion",
       "sound": "gentle_affirmation",
@@ -166,7 +155,7 @@
         "you matter"
       ]
     },
-    "marker_5": {
+    "marker_4": {
       "item": "Hand Caterpillar Fidget (beaded, silver-on-black-cord)",
       "visual": "segmented_light_wave",
       "sound": null,

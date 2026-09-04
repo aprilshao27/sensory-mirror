@@ -20,3 +20,9 @@ backend/dataset/raw/*/*.png
 backend/models/
 backend/runs/
 yolo11s.pt
+# ultralytics sometimes writes val()/predict() default output (and, once
+# observed, an unrelated auto-fetched checkpoint) relative to the repo root
+# rather than backend/ if a script omits explicit project=/name= — same
+# regenerable-artifact rationale as the backend/ rules above.
+/runs/
+/weights/

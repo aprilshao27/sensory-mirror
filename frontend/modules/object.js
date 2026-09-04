@@ -1,14 +1,18 @@
 // Phase 2 — Object recognition rendering.
 // Renders per-marker visuals (see config.objects[marker_id] in
 // content_config.json) in response to {"modality": "object", "markers": [
-// {marker_id, x, y, angle}, ...]} messages from
-// backend/modules/object_recognition.py, where x/y are normalised [0,1]
-// mirroring gesture.js's face_landmarks convention.
+// {marker_id, x, y}, ...]} messages from backend/modules/object_recognition.py
+// — a YOLO11s model fine-tuned on the 5 real items, marker_id being its
+// predicted class id (0-4, matching content_config.json's marker_0..marker_4
+// 1:1) — where x/y are normalised [0,1] mirroring gesture.js's
+// face_landmarks convention. No angle: a bounding-box detector doesn't
+// produce rotation the way the ArUco detector this replaced did; every
+// visual below already treats angle as optional and degrades to
+// translation-only reactivity without it.
 //
-// Real marker detection is flaky off a phone screen (moire/glare — see
-// object_recognition.py), so the DEV_SIMULATOR block at the bottom drives
-// this from the mouse instead, for tuning visuals independently of physical
-// marker reliability. Delete it once that's no longer needed.
+// The DEV_SIMULATOR block at the bottom drives this from the mouse instead
+// of real detections, for tuning visuals independently of camera/lighting/
+// model conditions. Delete it once that's no longer needed.
 //
 // Which marker plays which visual is entirely config-driven (objCfg.visual
 // dispatches to a renderer below), not hardcoded per marker_id here, so
@@ -308,7 +312,6 @@ const ObjectModule = (() => {
   }
 
   const VISUAL_RENDERERS = {
-    simple_cat_animation: drawCat,
     adaptive_colour_ripple: drawColourRipple,
     virtual_pet_companion: drawVirtualPet,
     segmented_light_wave: drawSegmentedLightWave,
@@ -326,121 +329,7 @@ const ObjectModule = (() => {
     drawDevOverlay();
   }
 
-  // ---- marker_0: simple_cat_animation (black cat plush, test item) --------
-
-  const CAT_BLINK_DURATION_MS = 140;
-
-  function drawCat(state, cfg) {
-    if (state.presence < 0.01 || state.smoothX === null) return;
-    const now = millis();
-    const alpha = state.presence;
-    const bodyColor = color(cfg.color ?? "#0d0d0d");
-    const eyeRingColor = color(cfg.eye_ring_color ?? "#E8B23D");
-    const noseColor = color(cfg.nose_color ?? "#9a9a9a");
-    const whiskerColor = color(cfg.whisker_color ?? "#d9d9d9");
-    const size = cfg.size ?? 120;
-    const x = state.smoothX;
-    const y = state.smoothY + Math.sin(now * 0.0022) * 5 * alpha;
-
-    const speed = recentSpeed(state.history);
-    const alertness = constrain(speed / (cfg.alert_speed_ref ?? 0.4), 0, 1);
-
-    if (state.nextBlinkAt === undefined) state.nextBlinkAt = now + random(1500, 3500);
-    if (now > state.nextBlinkAt) {
-      state.blinkStart = now;
-      state.nextBlinkAt = now + random(2600, 4600);
-    }
-    const blinking = now - state.blinkStart < CAT_BLINK_DURATION_MS;
-
-    push();
-    translate(x, y);
-
-    // Soft halo under the cat, same additive-blur-fill technique as
-    // gesture.js's face underlay, just a single pass at this size.
-    noStroke();
-    blendMode(ADD);
-    drawingContext.filter = `blur(${size * 0.25}px)`;
-    fill(red(bodyColor), green(bodyColor), blue(bodyColor), alpha * 60);
-    ellipse(0, size * 0.1, size * 1.5, size * 1.0);
-    drawingContext.filter = "none";
-    blendMode(BLEND);
-
-    // Stub tail: a short, near-stiff rounded nub off the back of the body
-    // lobe — the real plush's tail barely moves, unlike a live cat's, so
-    // this only sways a little even at low alertness (busy/still swaps here
-    // vs. gesture.js's held_smile progress, since this module has no such
-    // continuous "excitement" signal to key off).
-    const tailSway = Math.sin(now * 0.002) * 0.08;
-    stroke(red(bodyColor), green(bodyColor), blue(bodyColor), alpha * 255);
-    strokeWeight(size * 0.16);
-    strokeCap(ROUND);
-    line(-size * 0.55, -size * 0.22, -size * (0.62 + tailSway), -size * 0.48);
-
-    // Body: two overlapping lobes (rear body + larger head), same fill, read
-    // as one continuous rounded "loaf" blob rather than a separate head
-    // stuck onto a body.
-    noStroke();
-    fill(red(bodyColor), green(bodyColor), blue(bodyColor), alpha * 255);
-    ellipse(-size * 0.32, size * 0.02, size * 0.85, size * 0.7);
-    ellipse(size * 0.3, 0, size * 0.95, size * 0.82);
-
-    // Ears: rotate outward with alertness ("perking up") instead of a flat twitch.
-    const earSpread = lerp(0.15, 0.4, alertness);
-    const earPositions = [
-      { ex: size * 0.1, ey: -size * 0.36, tilt: -0.5 },
-      { ex: size * 0.5, ey: -size * 0.4, tilt: 0.5 },
-    ];
-    for (const { ex, ey, tilt } of earPositions) {
-      push();
-      translate(ex, ey);
-      rotate(tilt * (1 + earSpread));
-      fill(red(bodyColor), green(bodyColor), blue(bodyColor), alpha * 255);
-      triangle(-size * 0.11, 0, size * 0.11, 0, 0, -size * 0.24);
-      pop();
-    }
-
-    // Eyes: ring + pupil + highlight, matching the plush's embroidered
-    // "ring eye" look, collapsing to a flat line on blink.
-    const eyeY = -size * 0.02;
-    const eyePositions = [size * 0.18, size * 0.52];
-    for (const ex of eyePositions) {
-      if (blinking) {
-        stroke(red(bodyColor) + 40, green(bodyColor) + 40, blue(bodyColor) + 40, alpha * 255);
-        strokeWeight(size * 0.02);
-        line(ex - size * 0.05, eyeY, ex + size * 0.05, eyeY);
-        continue;
-      }
-      const ringSize = size * lerp(0.13, 0.16, alertness);
-      noFill();
-      stroke(red(eyeRingColor), green(eyeRingColor), blue(eyeRingColor), alpha * 255);
-      strokeWeight(size * 0.025);
-      circle(ex, eyeY, ringSize);
-      noStroke();
-      fill(0, 0, 0, alpha * 255);
-      circle(ex, eyeY, ringSize * 0.62);
-      fill(255, 255, 255, alpha * 230);
-      circle(ex - ringSize * 0.15, eyeY - ringSize * 0.15, ringSize * 0.18);
-    }
-
-    // Nose: small grey oval, not a pink triangle.
-    noStroke();
-    fill(red(noseColor), green(noseColor), blue(noseColor), alpha * 220);
-    ellipse(size * 0.35, size * 0.07, size * 0.06, size * 0.04);
-
-    // Whiskers: thin fanned lines either side of the nose.
-    stroke(red(whiskerColor), green(whiskerColor), blue(whiskerColor), alpha * 200);
-    strokeWeight(size * 0.008);
-    for (const [ex, dir] of [[size * 0.16, -1], [size * 0.54, 1]]) {
-      for (let i = -1; i <= 1; i++) {
-        const spread = i * size * 0.05;
-        line(ex, eyeY + size * 0.08 + spread * 0.3, ex + dir * size * 0.28, eyeY + size * 0.1 + spread);
-      }
-    }
-
-    pop();
-  }
-
-  // ---- marker_1-3: adaptive_colour_ripple (Pop It squishy balls) ----------
+  // ---- marker_0-2: adaptive_colour_ripple (Pop It squishy balls) ----------
   //
   // Deliberately abstract, not a literal render of the ball — soft rings
   // emanate from the marker's live position and travel outward with it, and
@@ -519,7 +408,7 @@ const ObjectModule = (() => {
     blendMode(BLEND);
   }
 
-  // ---- marker_4: virtual_pet_companion (purple cartoon cat) ---------------
+  // ---- marker_3: virtual_pet_companion (purple cartoon cat) ---------------
   //
   // A stylised chibi cartoon cat — big round head, small body, doesn't try
   // to be a literal render of the real Squeezibo plush — just purple and
@@ -560,9 +449,8 @@ const ObjectModule = (() => {
     const scaleX = (1 + state.squish * 0.3) * breathe;
     const scaleY = (1 - state.squish * 0.22) * breathe;
 
-    // Blink timer, reusing the same state fields drawCat uses on marker_0's
-    // own (separate) state object — safe, since each marker id has its own
-    // state instance.
+    // Blink timer — its own state fields, independent of every other
+    // marker's state instance.
     if (state.nextBlinkAt === undefined) state.nextBlinkAt = now + random(2200, 4200);
     if (now > state.nextBlinkAt) {
       state.blinkStart = now;
@@ -739,7 +627,7 @@ const ObjectModule = (() => {
     pop();
   }
 
-  // ---- marker_5: segmented_light_wave (Hand Caterpillar Fidget) -----------
+  // ---- marker_4: segmented_light_wave (Hand Caterpillar Fidget) -----------
   //
   // The trailing-chain technique: each segment samples the SAME recorded
   // path at an increasing time delay, so the chain's shape is literally the
@@ -927,10 +815,9 @@ const ObjectModule = (() => {
 
   // ---- dev-only simulator ---------------------------------------------------
   //
-  // Real marker detection can be unreliable off a phone screen, so this
-  // drives handleMessage() the same way a real backend message would, from
+  // Drives handleMessage() the same way a real backend message would, from
   // the mouse, so every visual above can be tuned in-browser independently
-  // of physical marker conditions. Press 0-5 to toggle a mouse-following
+  // of camera/lighting/model conditions. Press 0-4 to toggle a mouse-following
   // marker of that ID; move the mouse to "hold" it. Delete this block and
   // the keyPressed() hookup in core.js once real detection is reliable
   // enough that it's no longer needed for tuning.
@@ -939,7 +826,7 @@ const ObjectModule = (() => {
 
   function handleDevKey(key) {
     if (!DEV_SIMULATOR) return;
-    const id = "012345".indexOf(key);
+    const id = "01234".indexOf(key);
     if (id === -1) return;
     simulatedMarkerId = simulatedMarkerId === id ? null : id;
   }
@@ -960,7 +847,7 @@ const ObjectModule = (() => {
     textSize(13);
     textFont("monospace");
     const active = simulatedMarkerId === null ? "none" : simulatedMarkerId;
-    text(`object sim: keys 0-5 toggle a mouse-driven marker (active: ${active})`, 20, 85);
+    text(`object sim: keys 0-4 toggle a mouse-driven marker (active: ${active})`, 20, 85);
     pop();
   }
 

@@ -8,15 +8,15 @@ plan for design rationale, thematic grounding, and evaluation.
 ## Architecture
 
 ```
-[Camera] -> [FastAPI backend: OpenCV ArUco (-> fine-tuned YOLO11s) + MediaPipe] -> WebSocket -> [p5.js frontend]
+[Camera] -> [FastAPI backend: fine-tuned YOLO11s + MediaPipe] -> WebSocket -> [p5.js frontend]
                                                                 |
                                               [Researcher control panel: live config]
 ```
 
-Object recognition is mid-migration: the backend still runs the ArUco
-detector today, but it's being replaced by a YOLO11s model fine-tuned on
-real photos of the 5 sensory items — see "Object recognition dataset &
-model" below for what's done and what's left.
+Object recognition runs on a YOLO11s model fine-tuned on real photos of the
+5 sensory items, recognising them directly from the camera feed rather than
+requiring a printed marker on each one — see "Object recognition dataset &
+model" below for the dataset, training, and results.
 
 Each modality (proxemic, object, gesture) is an independent backend module
 publishing its own event stream over the same WebSocket, so they can be
@@ -34,13 +34,13 @@ backend/
   modules/
     proxemic.py               Phase 1 — MediaPipe Pose, implemented
     gesture.py                 Phase 3 — MediaPipe Face Mesh, implemented
-    object_recognition.py     Phase 2 — ArUco, implemented (mid-migration to YOLO11s)
+    object_recognition.py     Phase 2 — fine-tuned YOLO11s, implemented
   scripts/
-    generate_aruco_markers.py generates printable marker PNGs (DICT_4X4_50)
     prepare_dataset.py        builds the YOLO training set from dataset/raw/ — see below
+    train_object_model.py     fine-tunes YOLO11s on it, evaluates, publishes weights
   dataset/                    object recognition training data — see below (gitignored)
-  assets/
-    markers/                  marker_0.png .. marker_5.png, printable
+  models/
+    object_recognition.pt     published fine-tuned weights (gitignored, regenerate via the scripts above)
   config/
     content_config.json       modality -> visual/audio response mapping
     config_manager.py         load/save + change logging for hot-reload
@@ -54,7 +54,7 @@ frontend/
     audio.js                   procedural Web Audio payoffs (no audio assets yet)
     proxemic.js                Phase 1 rendering, implemented
     gesture.js                 Phase 3 rendering, implemented
-    object.js                  Phase 2 rendering, implemented (ArUco marker_id -> visual)
+    object.js                  Phase 2 rendering, implemented (marker_id -> visual)
 control_panel/
   index.html, style.css, app.js   Phase 4 — live modality switcher, all three
                                     modalities selectable (proxemic/gesture/object)
@@ -64,12 +64,11 @@ control_panel/
 
 1. **Proxemic interaction** — implemented, backend and frontend.
 2. **Intentional facial gesture** — implemented, backend and frontend.
-3. **Object recognition** — implemented and running on ArUco markers today
-   (`marker_0`-`marker_5` in `content_config.json`). Mid-migration to a
-   YOLO11s model fine-tuned on real photos of the 5 sensory items instead of
-   printed tags — dataset built, fully hand-annotated, and split; training
-   and the backend/frontend swap are the remaining steps. See "Object
-   recognition dataset & model" below.
+3. **Object recognition** — implemented, backend and frontend, running on a
+   YOLO11s model fine-tuned on real photos of the 5 sensory items
+   (`marker_0`-`marker_4` in `content_config.json`) — no printed tags. See
+   "Object recognition dataset & model" below for the dataset, training, and
+   results.
 4. **Researcher control panel** — built for all three modalities, live
    switching and change logging working for each.
 
@@ -90,6 +89,13 @@ The camera is picked up by device name (`CAMERA_NAME` in `main.py`, default
 `"Brio 100"`) rather than a hardcoded index, since Windows can silently
 reorder DirectShow indices as camera-like devices come and go.
 
+`main.py`'s shared camera loop instantiates all three detectors up front,
+regardless of which modality is currently active — so `backend/models/
+object_recognition.pt` must exist for the **backend to start at all**, not
+just for object recognition to work. On a fresh clone (that file is
+gitignored, see below) run `prepare_dataset.py` then `train_object_model.py`
+first.
+
 Then open:
 - **http://localhost:8000** — the mirror itself. The p5.js frontend connects
   over `/ws` and renders whichever modality is active: the three proxemic
@@ -102,37 +108,19 @@ Then open:
 Edit `backend/config/content_config.json` while the server is running to see
 the color/visual mapping hot-reload without a restart.
 
-## Object recognition markers (current — being replaced)
+## Object recognition dataset & model
 
-`backend/scripts/generate_aruco_markers.py` generates printable `DICT_4X4_50`
-marker PNGs (with a white quiet-zone border) into `backend/assets/markers/`.
-The IDs currently assigned in `content_config.json`'s `objects` section:
+`backend/modules/object_recognition.py` runs a YOLO11s model fine-tuned on
+real photos of the 5 sensory items, so the mirror recognises them directly
+from the camera feed — no printed marker on each item (an earlier ArUco-based
+version of this module, and the physical markers it needed, have been
+retired). `marker_0` from that earlier version — a black cat plush used only
+as a placeholder while the real items were on order — is retired too; there
+was never a dataset for it, and no real device uses it.
 
-| Marker | Item |
-|---|---|
-| `marker_0` | Black cat plush (placeholder, used only for early testing) |
-| `marker_1` | Pop It squishy ball — magenta/pink |
-| `marker_2` | Pop It squishy ball — cyan/pastel multi |
-| `marker_3` | Pop It squishy ball — mint/red/blue |
-| `marker_4` | Noomi Squeezibo fabric squishy (purple cat) |
-| `marker_5` | Hand caterpillar fidget |
-
-Run from `backend/`: `.venv/Scripts/python.exe scripts/generate_aruco_markers.py --ids 0 1 2 3 4 5`
-
-This whole approach — a printed tag stuck to each item — is being replaced by
-direct camera-based recognition; see the next section. Once that lands, this
-section, `generate_aruco_markers.py`, and `assets/markers/` go away.
-
-## Object recognition dataset & model (in progress)
-
-Replacing ArUco with a YOLO11s model fine-tuned on real photos of the 5
-items, so the mirror recognises them directly rather than requiring a
-printed marker on each one. This also retires `marker_0` (the black cat
-placeholder) — no dataset for it, and no real device will use it.
-
-**Status: dataset done (1,686/1,686 images hand-annotated); training and the
-backend/frontend swap not started yet.** `backend/modules/object_recognition.py`
-still runs the ArUco detector described above until that lands.
+**Status: done.** Dataset built and 100% hand-annotated (1,686/1,686 images),
+YOLO11s fine-tuned and evaluated, weights published to
+`backend/models/object_recognition.pt` and loaded by the runtime detector.
 
 ### Dataset layout (`backend/dataset/`, gitignored — regenerate, don't commit)
 
@@ -148,8 +136,9 @@ backend/dataset/
 ```
 
 Class id (fixed by list order in `backend/scripts/prepare_dataset.py`,
-matches `data.yaml` and will become `marker_0`..`marker_4` once the backend
-swap lands):
+matches `data.yaml` and `content_config.json`'s `marker_0`..`marker_4` keys
+1:1 — the runtime detector publishes the model's class id unchanged, no
+translation layer):
 
 | class id | folder (`dataset/raw/<class>/`) | item |
 |---|---|---|
@@ -210,12 +199,54 @@ avoids leaking near-twin frames across the split, at the cost of the actual
 per-class ratios drifting a bit from the nominal 72/18/10 target (uneven,
 small numbers of bursts per class) — logged per class when the script runs.
 
-### Training (not yet built)
+### Training (`train_object_model.py`)
 
-Next: fine-tune `yolo11s.pt` (COCO-pretrained) on `dataset/data.yaml` via
-`ultralytics`, evaluate on the held-out `test` split, and swap
-`backend/modules/object_recognition.py` to load the result instead of
-running `cv2.aruco`.
+```
+cd backend
+.venv/Scripts/python.exe scripts/train_object_model.py
+```
+
+Fine-tunes `yolo11s.pt` (COCO-pretrained) on `dataset/data.yaml` — all
+layers, not a frozen backbone — for up to 100 epochs at `imgsz=640` with
+early stopping (`patience=30`), everything else left at Ultralytics' own
+tuned defaults (augmentation, optimizer, batch sizing) rather than
+hand-picked. Then evaluates on the held-out `test` split (never touched
+during training) and copies the best checkpoint to
+`backend/models/object_recognition.pt`, the stable path the runtime loads.
+
+`ultralytics` is in `requirements.txt`, but a plain `pip install -r
+requirements.txt` pulls CPU-only `torch` from PyPI. For GPU training, install
+the CUDA build explicitly afterwards, matching your driver's supported CUDA
+version (`nvidia-smi`) — e.g. for CUDA 13.x:
+```
+.venv/Scripts/python.exe -m pip install --index-url https://download.pytorch.org/whl/cu130 --force-reinstall --no-deps torch torchvision
+```
+
+**Result** (RTX 4060 laptop GPU, 77 epochs to early-stop): test-set mAP50 =
+**0.963**, mAP50-95 = **0.888**, ~8.5ms/image inference — comfortably
+real-time for the live camera loop.
+
+| Class | mAP50 | Precision | Recall |
+|---|---|---|---|
+| pink_pop_it | 0.995 | 0.984 | 1.00 |
+| blue_green_pop_it | 0.995 | 0.983 | 1.00 |
+| blue_red_pop_it | 0.995 | 1.00 | 0.99 |
+| noomi_squeezibo_cat | 0.995 | 0.960 | 1.00 |
+| caterpillar | 0.835 | 0.901 | 0.784 |
+
+Caterpillar is the one weak spot — a thin, floppy, beaded item that coils
+into much more varied silhouettes than the other four (round pop-its, a
+compact plush), so it's a genuinely harder shape to localize consistently
+rather than a labeling issue. Precision is still solid (few false
+positives); the risk is more the occasional missed detection or loose box.
+Being tracked as a candidate for more training data if it proves flaky in
+practice, rather than pre-emptively fixed against an offline metric.
+
+At inference, `ObjectRecognitionDetector` also keeps only the
+highest-confidence detection per class per frame — Ultralytics' own
+class-aware NMS occasionally leaves two overlapping boxes standing for one
+physical item (just under its IoU threshold), which would otherwise jitter
+that item's tracked position between the two boxes every frame.
 
 ## Key design commitments
 
