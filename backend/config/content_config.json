@@ -1,5 +1,5 @@
 {
-  "active_modality": "gesture",
+  "active_modality": "object",
   "proxemic": {
     "underlay": {
       "color": "#8FD8E8",
@@ -159,44 +159,18 @@
       "item": "Hand Caterpillar Fidget (beaded, silver-on-black-cord)",
       "visual": "segmented_light_wave",
       "sound": null,
-      "segment_count": 11,
-      "segment_lag_ms": 45,
-      "color_cycle": [
-        "#4A90D9",
-        "#7FD1E0",
-        "#B39DDB",
-        "#FF8FD6"
-      ],
-      "color_step": 0.35,
-      "wave_speed": 1.4,
-      "wave_speed_ref": 0.5,
-      "angular_speed_ref": 0.004,
-      "max_wave_speed_mult": 3,
-      "head_size": 24,
-      "tail_size": 17,
-      "glow_blur": 6,
+      "segment_count": 9,
+      "head_size": 22,
+      "tail_size": 12,
       "cord_color": "#1a1a1a",
-      "cord_weight": 3,
-      "pulse_min_hz": 0.5,
-      "pulse_max_hz": 3,
-      "pulse_size_min": 0.85,
-      "pulse_size_max": 1.2,
-      "pulse_alpha_min": 0.7,
-      "trail_line_count": 12,
-      "trail_amp_1": 22,
-      "trail_amp_2": 13,
-      "trail_freq_1": 0.007,
-      "trail_freq_2": 0.013,
-      "trail_bump_amp": 8,
-      "trail_bump_freq": 0.045,
-      "trail_bump_sharpness": 2.2,
-      "trail_scroll_speed": 0.03,
-      "trail_sample_step": 24,
-      "trail_darken_radius": 220,
-      "trail_max_darken": 0.8,
-      "trail_stroke_weight": 3.5,
-      "trail_stroke_alpha": 90,
-      "trail_glow_weight_mult": 3.5
+      "cord_weight": 2.5,
+      "body_color_dim": "#3E6B5C",
+      "body_color_active": "#7FD9B0",
+      "coil_ease": 0.04,
+      "spiral_turns": 1.5,
+      "speed_ref": 0.5,
+      "activity_ease_up": 0.05,
+      "activity_ease_down": 0.02
     }
   },
   "ambient_wave": {
@@ -253,7 +227,12 @@
       "sound": "chime"
     },
     "mouth_open": {
-      "ring_colors": ["#FFB84D", "#FFD966", "#FF8C69", "#FFE29A"],
+      "ring_colors": [
+        "#FFB84D",
+        "#FFD966",
+        "#FF8C69",
+        "#FFE29A"
+      ],
       "ring_spawn_interval_min_ms": 550,
       "ring_spawn_interval_max_ms": 140,
       "ring_life_ms": 900,

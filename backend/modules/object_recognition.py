@@ -45,14 +45,22 @@ class ObjectRecognitionDetector:
         self._model = YOLO(str(WEIGHTS_PATH))
 
     def process(self, frame_rgb) -> dict:
-        """Returns {"markers": [{"marker_id", "x", "y"}, ...]} for every item
-        detected in the current frame. An empty list (not None) when nothing
-        is detected — the frontend's own per-marker presence timeout governs
-        fade-out, not message cadence, so there's no need to distinguish "no
-        items this frame" from "skip this frame".
+        """Returns {"markers": [{"marker_id", "x", "y", "w", "h"}, ...]} for
+        every item detected in the current frame. An empty list (not None)
+        when nothing is detected — the frontend's own per-marker presence
+        timeout governs fade-out, not message cadence, so there's no need to
+        distinguish "no items this frame" from "skip this frame".
 
-        x/y are the detected box's centre, normalised [0,1] against frame
-        width/height (same convention as gesture.py's face_landmarks).
+        x/y are the detected box's centre, w/h its full width/height, all
+        normalised [0,1] against frame width/height (same convention as
+        gesture.py's face_landmarks). w/h let a consumer read the box's
+        aspect ratio as a proxy for the physical item's own pose (e.g.
+        marker_4's caterpillar fidget coiled into a compact clump vs.
+        stretched out long) — a per-frame shape cue no single centre point
+        could give, and one that (unlike raw box area) stays meaningful
+        without confusing "item pose" with "item's distance from camera",
+        since moving closer/further scales both dimensions together instead
+        of changing their ratio.
         """
         h, w = frame_rgb.shape[:2]
         # ultralytics expects the same BGR convention cv2.imread produces —
@@ -82,12 +90,14 @@ class ObjectRecognitionDetector:
 
         markers = []
         for cls_id, (_, box) in best_per_class.items():
-            cx, cy = box.xywh[0][:2].tolist()
+            cx, cy, bw, bh = box.xywh[0].tolist()
             markers.append(
                 {
                     "marker_id": cls_id,
                     "x": round(cx / w, 4),
                     "y": round(cy / h, 4),
+                    "w": round(bw / w, 4),
+                    "h": round(bh / h, 4),
                 }
             )
 

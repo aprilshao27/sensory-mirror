@@ -252,6 +252,15 @@ def main():
                 f.unlink()
         d.mkdir(parents=True, exist_ok=True)
 
+    # Ultralytics caches parsed labels next to each labels/ dir as labels.cache,
+    # keyed on a hash of file sizes + paths only (not content) — since our label
+    # lines are fixed-width and re-encoded images are the same size run to run,
+    # a relabel can leave that hash unchanged and Ultralytics silently trains on
+    # the stale cache instead of the labels rewritten above. Delete them so every
+    # run is picked up fresh.
+    for name in ("trainval/train/labels.cache", "trainval/val/labels.cache", "test/labels.cache"):
+        (DATASET_DIR / name).unlink(missing_ok=True)
+
     preview_root = DATASET_DIR / "_bbox_preview"
     if preview_root.exists():
         for cls_dir in preview_root.iterdir():

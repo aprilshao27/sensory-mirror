@@ -1,14 +1,18 @@
 // Phase 2 — Object recognition rendering.
 // Renders per-marker visuals (see config.objects[marker_id] in
 // content_config.json) in response to {"modality": "object", "markers": [
-// {marker_id, x, y}, ...]} messages from backend/modules/object_recognition.py
-// — a YOLO11s model fine-tuned on the 5 real items, marker_id being its
-// predicted class id (0-4, matching content_config.json's marker_0..marker_4
-// 1:1) — where x/y are normalised [0,1] mirroring gesture.js's
-// face_landmarks convention. No angle: a bounding-box detector doesn't
-// produce rotation the way the ArUco detector this replaced did; every
-// visual below already treats angle as optional and degrades to
-// translation-only reactivity without it.
+// {marker_id, x, y, w, h}, ...]} messages from
+// backend/modules/object_recognition.py — a YOLO11s model fine-tuned on the
+// 5 real items, marker_id being its predicted class id (0-4, matching
+// content_config.json's marker_0..marker_4 1:1) — where x/y/w/h are the
+// detection box's centre and size, normalised [0,1] (x/y mirroring
+// gesture.js's face_landmarks convention). No angle: a bounding-box
+// detector doesn't produce rotation the way the ArUco detector this
+// replaced did; every visual below already treats angle as optional and
+// degrades to translation-only reactivity without it. w/h, unlike angle,
+// IS reliably produced every frame — marker_4's caterpillar visual reads
+// its aspect ratio as a coiled-vs-stretched pose proxy, see
+// drawSegmentedLightWave below.
 //
 // The DEV_SIMULATOR block at the bottom drives this from the mouse instead
 // of real detections, for tuning visuals independently of camera/lighting/
@@ -39,6 +43,7 @@ const ObjectModule = (() => {
   const PRESENCE_EASE_OUT = 0.06;
   const MARKER_TIMEOUT_MS = 250; // no sighting within this long reads as "gone", not a blip
   const HISTORY_RETAIN_MS = 1200; // comfortably longer than any visual's max chain lag
+  const DEFAULT_NORM_BOX_SIZE = 0.12; // fallback w/h (normalised) for messages that omit it, e.g. the dev simulator
 
   function getOrCreateState(id) {
     let state = markers.get(id);
@@ -59,7 +64,11 @@ const ObjectModule = (() => {
         lastAffirmationText: null,
         nextBlinkAt: undefined, // simple_cat_animation
         blinkStart: -Infinity,
-        pulsePhase: 0, // segmented_light_wave
+        smoothW: null, // segmented_light_wave — eased box width/height, canvas px
+        smoothH: null,
+        coilAmount: 0, // segmented_light_wave — eased 0 (stretched out) .. 1 (coiled up)
+        orientation: 0, // segmented_light_wave — eased radians, horizontal (0) .. vertical (HALF_PI)
+        activity: 0, // segmented_light_wave — eased 0 (still) .. 1 (being handled)
       };
       markers.set(id, state);
     }
@@ -70,7 +79,14 @@ const ObjectModule = (() => {
     const now = millis();
     for (const m of msg.markers ?? []) {
       const state = getOrCreateState(m.marker_id);
-      state.history.push({ x: m.x * width, y: m.y * height, angle: m.angle ?? null, t: now });
+      state.history.push({
+        x: m.x * width,
+        y: m.y * height,
+        angle: m.angle ?? null,
+        w: (m.w ?? DEFAULT_NORM_BOX_SIZE) * width,
+        h: (m.h ?? DEFAULT_NORM_BOX_SIZE) * height,
+        t: now,
+      });
       state.lastSeen = now;
     }
   }
@@ -91,9 +107,13 @@ const ObjectModule = (() => {
         if (state.smoothX === null) {
           state.smoothX = latest.x;
           state.smoothY = latest.y;
+          state.smoothW = latest.w;
+          state.smoothH = latest.h;
         } else {
           state.smoothX += (latest.x - state.smoothX) * 0.2;
           state.smoothY += (latest.y - state.smoothY) * 0.2;
+          state.smoothW += (latest.w - state.smoothW) * 0.2;
+          state.smoothH += (latest.h - state.smoothH) * 0.2;
         }
       }
 
@@ -143,25 +163,6 @@ const ObjectModule = (() => {
 
   // ---- shared helpers ------------------------------------------------------
 
-  // Interpolates the tracked path to find where the marker was at targetT,
-  // clamping to the oldest sample once targetT runs off the front of the
-  // buffer (e.g. right after a marker first appears, before enough history
-  // has built up for a segment's full lag) rather than returning nothing.
-  function sampleHistoryAt(history, targetT) {
-    if (history.length === 0) return null;
-    if (targetT <= history[0].t) return history[0];
-    for (let i = 1; i < history.length; i++) {
-      if (history[i].t >= targetT) {
-        const a = history[i - 1];
-        const b = history[i];
-        const span = b.t - a.t;
-        const tt = span > 0 ? (targetT - a.t) / span : 0;
-        return { x: lerp(a.x, b.x, tt), y: lerp(a.y, b.y, tt) };
-      }
-    }
-    return history[history.length - 1];
-  }
-
   // Recent px/ms speed over a short trailing window — the shared "how
   // vigorously is this thing being handled right now" signal every visual
   // below scales its reactivity off, so a still object stays calm and an
@@ -176,30 +177,6 @@ const ObjectModule = (() => {
     const b = history[history.length - 1];
     const dt = b.t - a.t;
     return dt > 0 ? dist(a.x, a.y, b.x, b.y) / dt : 0;
-  }
-
-  // Recent rad/ms angular speed, same trailing-window shape as recentSpeed
-  // above — a marker being twisted/flexed in place (imagine bending the
-  // caterpillar fidget without moving it much through space) barely
-  // registers on recentSpeed's translational distance, so this is the
-  // second half of "how vigorously is this being handled": rotation, not
-  // just position change. Returns 0 for markers with no angle data (the
-  // dev simulator's synthetic messages don't set one), degrading gracefully
-  // to translation-only reactivity rather than throwing.
-  function recentAngularSpeed(history, windowMs = 150) {
-    if (history.length < 2) return 0;
-    const now = history[history.length - 1].t;
-    const cutoff = now - windowMs;
-    let i = history.length - 1;
-    while (i > 0 && history[i - 1].t > cutoff) i--;
-    const a = history[i];
-    const b = history[history.length - 1];
-    const dt = b.t - a.t;
-    if (dt <= 0 || a.angle == null || b.angle == null) return 0;
-    // Shortest signed angular distance, so a wrap from +PI to -PI reads as
-    // a small turn rather than a spurious near-2*PI jump.
-    const dAngle = Math.atan2(Math.sin(b.angle - a.angle), Math.cos(b.angle - a.angle));
-    return Math.abs(dAngle) / dt;
   }
 
   // Like proxemic.js's cyclePalette, but takes an explicit phase instead of
@@ -326,7 +303,6 @@ const ObjectModule = (() => {
       const renderer = objCfg && VISUAL_RENDERERS[objCfg.visual];
       if (renderer) renderer(state, objCfg);
     }
-    drawDevOverlay();
   }
 
   // ---- marker_0-2: adaptive_colour_ripple (Pop It squishy balls) ----------
@@ -632,188 +608,114 @@ const ObjectModule = (() => {
 
   // ---- marker_4: segmented_light_wave (Hand Caterpillar Fidget) -----------
   //
-  // The trailing-chain technique: each segment samples the SAME recorded
-  // path at an increasing time delay, so the chain's shape is literally the
-  // marker's own recent trajectory, link by link, rather than anything
-  // simulated independently per segment. Colour travels along the chain as
-  // a phase offset per segment index, at a speed tied to how fast the
-  // marker is actually moving.
+  // Grounded in how this specific toy is actually handled — bunched into a
+  // compact coil in the palm, or stretched out long — rather than carried
+  // around the frame, plus a deliberately low-complexity, non-cycling
+  // response (Snoezelen/multi-sensory-environment design principles;
+  // Mostafa's ASPECTSS index) after an earlier bead-necklace-with-
+  // travelling-rainbow version read as too busy for the intended audience.
   //
-  // The real item is a row of glossy silver beads threaded on black cord —
-  // segments are close to uniform size (not the sharp head->tail taper a
-  // generic "trail" would have) and each gets an unblurred highlight dot
-  // for a bead-like glint, with a thin dark cord drawn underneath threading
-  // through them. The glow/colour-cycle itself stays as originally
-  // designed — vivid colour is the point of the visual reaction, not a
-  // literal render of the (mostly black/silver) real object.
+  // Two real, sensed signals drive it, and nothing else:
+  //   - shape: the detection box's own aspect ratio (state.smoothW/H) is a
+  //     direct, distance-invariant proxy for coiled-vs-stretched — moving
+  //     the toy closer/further scales both box dimensions together, but
+  //     bunching or extending it changes their RATIO, which coilAmount
+  //     below reads. This replaces the previous version's angular-speed
+  //     "twist energy" term, which — honestly — never received real data:
+  //     the bounding-box detector this module runs on has no orientation
+  //     output, so angle was always null and that term was silently
+  //     always zero, even though twisting/coiling in place is close to how
+  //     this toy is actually fidgeted with.
+  //   - activity: recentSpeed (translation) alone, eased slowly in both
+  //     directions so it reads as settling, not reacting.
+  // coilAmount, orientation, and activity are all eased on a slow,
+  // multi-frame time constant (not the per-message smoothing above) so the
+  // body visibly settles into a new pose/brightness rather than snapping —
+  // a coiled or stretched toy doesn't change shape instantly, and neither
+  // should its reflection.
   //
-  // Energy blends translational speed (recentSpeed) with angular speed
-  // (recentAngularSpeed) rather than translation alone — a single marker
-  // can't see the caterpillar's own segments articulating relative to each
-  // other, but a marker being twisted/flexed in place at least shows up as
-  // rotation even when it barely moves through the frame, which pure
-  // position-based speed would miss entirely.
-  //
-  // The trailing chain and per-segment colour travel below are a real
-  // record of the marker's own path, not fabricated — but they're still
-  // only one rigid point's motion, not the toy's actual segment-to-segment
-  // articulation, so treating "the chain's shape" as the harmony-with-the-
-  // -action signal overclaims what's actually being sensed. What IS
-  // reliably sensed is how vigorously the thing is being handled — so
-  // pulseHz below drives a synchronised "breathing" pulse across every
-  // segment together (size + brightness, all in phase, unlike the
-  // per-segment colour travel's staggered phase), directly tempo-matched to
-  // that energy: slow and calm when still, quick and energised when
-  // handled vigorously. That tempo match — reaction pace mirroring action
-  // pace — is the actual harmony-of-modalities signal here, not the
-  // chain's spatial shape.
-
-  // Full-screen ambient backdrop, same calming-wave style as the pop-it
-  // balls' ring field (broad sine + rounded "dome" bump texture) but laid
-  // out as horizontal trails rather than rings — no particular reason this
-  // item's backdrop needs to match theirs geometrically, horizontal just
-  // suits a single long marker better than a centred mandala would.
-  //
-  // The interaction is different too: instead of physically pushing the
-  // trails apart, the marker darkens the trail colour near its own
-  // position. p5 can't vary one continuous shape's stroke colour per
-  // vertex, so each trail is drawn as many short segments rather than one
-  // beginShape()/endShape() polyline — the only way to get per-point colour
-  // out of the immediate-mode API.
-  //
-  // The whole pattern also continuously scrolls sideways (scrollX below) —
-  // vertices stay on the fixed screen sample grid, but the phase fed into
-  // the wave functions drifts with time, so the shape sampled at each grid
-  // point keeps changing and the bumps visibly travel across the screen and
-  // off the edge, link by link, rather than oscillating in place.
-  function drawCaterpillarTrails(state, cfg) {
-    if (state.presence < 0.01) return;
-    const now = millis();
-    const lineCount = cfg.trail_line_count ?? 12;
-    const colors = (cfg.color_cycle ?? ["#4A90D9", "#7FD1E0", "#B39DDB", "#FF8FD6"]).map((h) => color(h));
-    const ampA = cfg.trail_amp_1 ?? 16;
-    const ampB = cfg.trail_amp_2 ?? 9;
-    const freqA = cfg.trail_freq_1 ?? 0.007;
-    const freqB = cfg.trail_freq_2 ?? 0.013;
-    const domeAmp = cfg.trail_bump_amp ?? 8;
-    const domeFreq = cfg.trail_bump_freq ?? 0.045;
-    const domeSharpness = cfg.trail_bump_sharpness ?? 2.2;
-    const scrollSpeed = cfg.trail_scroll_speed ?? 0.03; // px/ms the whole pattern drifts sideways
-    const sampleStep = cfg.trail_sample_step ?? 24;
-    const darkenRadius = cfg.trail_darken_radius ?? 220;
-    const maxDarken = cfg.trail_max_darken ?? 0.8;
-    const hasMarkerPos = state.smoothX !== null;
-
-    const spacing = height / (lineCount + 1);
-    const coreWeight = cfg.trail_stroke_weight ?? 2;
-    const glowWeight = coreWeight * (cfg.trail_glow_weight_mult ?? 3.5);
-
-    blendMode(ADD);
-    for (let li = 0; li < lineCount; li++) {
-      const baseY = spacing * (li + 1);
-      const baseColor = paletteColorAt(colors, (li / lineCount) * colors.length + now * 0.00008);
-
-      let prevX = null;
-      let prevY = null;
-      for (let x = -sampleStep; x <= width + sampleStep; x += sampleStep) {
-        // The pattern travels by shifting the PHASE fed into the wave
-        // functions over time (scrollX), not by moving each vertex's drawn
-        // x position — the vertex stays on the fixed screen grid, but the
-        // shape sampled at that grid point keeps changing, so what's
-        // rendered there flows steadily across the screen and off the
-        // edge, link by link, rather than wiggling in place.
-        const scrollX = x - now * scrollSpeed;
-        const domePhase = Math.sin(scrollX * domeFreq + li * 1.1);
-        const dome = Math.pow((domePhase + 1) / 2, domeSharpness) * domeAmp;
-        const y =
-          baseY +
-          Math.sin(scrollX * freqA + li * 0.7) * ampA +
-          Math.sin(scrollX * freqB - li * 1.3) * ampB +
-          dome;
-
-        if (prevX !== null) {
-          const midX = (prevX + x) / 2;
-          const midY = (prevY + y) / 2;
-          let c = baseColor;
-          if (hasMarkerPos) {
-            const d = dist(midX, midY, state.smoothX, state.smoothY);
-            if (d < darkenRadius) {
-              c = lerpColor(baseColor, color(0, 0, 0), (1 - d / darkenRadius) * maxDarken);
-            }
-          }
-          const alpha = (cfg.trail_stroke_alpha ?? 90) * state.presence;
-          // Manual two-pass glow (wide+faint, then thin+bright) instead of
-          // drawingContext.filter blur — CSS canvas filters are applied per
-          // draw call, not once per frame, so blurring ~650 tiny segments
-          // individually (one per sample step per line) was the actual
-          // cause of the slowdown, not the segment-based colouring itself.
-          stroke(red(c), green(c), blue(c), alpha * 0.3);
-          strokeWeight(glowWeight);
-          line(prevX, prevY, x, y);
-          stroke(red(c), green(c), blue(c), alpha);
-          strokeWeight(coreWeight);
-          line(prevX, prevY, x, y);
-        }
-        prevX = x;
-        prevY = y;
-      }
-    }
-    blendMode(BLEND);
-  }
-
+  // The body is one continuous curve, blended by coilAmount between two
+  // templates sampled at the same t values — a gentle straight line
+  // (stretched) and an Archimedean spiral (coiled) — so every in-between
+  // coilAmount is a smooth morph, not a swap between two unrelated
+  // drawings. Colour never cycles: a single hue's brightness eases toward
+  // "active" or "dim" with state.activity, so intensity — not hue, and not
+  // a periodic pulse — is the only thing handling changes, deliberately
+  // avoiding anything that could read as flashing.
   function drawSegmentedLightWave(state, cfg) {
-    if (state.history.length === 0) return;
-    drawCaterpillarTrails(state, cfg);
-    const now = millis();
-    const segmentCount = cfg.segment_count ?? 11;
-    const lagMs = cfg.segment_lag_ms ?? 45;
-    const colors = cfg.color_cycle ?? ["#4A90D9", "#7FD1E0", "#B39DDB", "#FF8FD6"];
-    const headSize = cfg.head_size ?? 24;
-    const tailSize = cfg.tail_size ?? 17;
+    if (state.history.length === 0 || state.smoothW === null) return;
+    const segmentCount = cfg.segment_count ?? 9;
+    const headSize = cfg.head_size ?? 22;
+    const tailSize = cfg.tail_size ?? 12;
     const cordColor = color(cfg.cord_color ?? "#1a1a1a");
+    const bodyColorDim = color(cfg.body_color_dim ?? "#3E6B5C");
+    const bodyColorActive = color(cfg.body_color_active ?? "#7FD9B0");
 
-    const translateEnergy = constrain(recentSpeed(state.history) / (cfg.wave_speed_ref ?? 0.5), 0, 1);
-    const angularEnergy = constrain(recentAngularSpeed(state.history) / (cfg.angular_speed_ref ?? 0.004), 0, 1);
-    const energy = constrain(translateEnergy + angularEnergy, 0, 1);
-    const speedMult = lerp(1, cfg.max_wave_speed_mult ?? 3, energy);
-    const wavePos = now * 0.001 * (cfg.wave_speed ?? 1.4) * speedMult;
+    // ---- shape: coiled (compact box) <-> stretched (elongated box) -------
+    const boxMax = Math.max(state.smoothW, state.smoothH);
+    const boxMin = Math.min(state.smoothW, state.smoothH);
+    const elongation = boxMax > 0 ? 1 - boxMin / boxMax : 0; // 0 square/compact .. 1 very elongated
+    const coilTarget = constrain(1 - elongation, 0, 1);
+    const coilEase = cfg.coil_ease ?? 0.04; // slow — a settle, not a snap
+    state.coilAmount += (coilTarget - state.coilAmount) * coilEase;
 
-    const pulseHz = lerp(cfg.pulse_min_hz ?? 0.5, cfg.pulse_max_hz ?? 3, energy);
-    state.pulsePhase += (deltaTime / 1000) * pulseHz * TWO_PI;
-    const pulse = 0.5 + 0.5 * Math.sin(state.pulsePhase); // 0..1, shared across every segment
+    // Which way the box is elongated (wide vs tall) orients the stretched
+    // template only — the coiled template has no preferred axis, so this
+    // has no visible effect once coilAmount is high anyway.
+    const orientationTarget = state.smoothW >= state.smoothH ? 0 : HALF_PI;
+    state.orientation += (orientationTarget - state.orientation) * coilEase;
+
+    // ---- activity: how much it's currently being moved -------------------
+    const activityTarget = constrain(recentSpeed(state.history) / (cfg.speed_ref ?? 0.5), 0, 1);
+    const activityEase =
+      activityTarget > state.activity ? cfg.activity_ease_up ?? 0.05 : cfg.activity_ease_down ?? 0.02;
+    state.activity += (activityTarget - state.activity) * activityEase;
+
+    const bodyLength = cfg.body_length ?? Math.max(boxMax, 60) * 1.4;
+    const spiralTurns = cfg.spiral_turns ?? 1.5;
+    const spiralMaxRadius = cfg.spiral_max_radius ?? bodyLength * 0.3;
+
+    const cx = state.smoothX;
+    const cy = state.smoothY;
+    const cosO = Math.cos(state.orientation);
+    const sinO = Math.sin(state.orientation);
 
     const points = [];
     for (let i = 0; i < segmentCount; i++) {
-      points.push(sampleHistoryAt(state.history, now - i * lagMs));
+      const t = i / Math.max(segmentCount - 1, 1); // 0 head .. 1 tail
+      const along = (t - 0.5) * bodyLength;
+      const straightX = cx + cosO * along;
+      const straightY = cy + sinO * along;
+
+      const spiralAngle = t * spiralTurns * TWO_PI;
+      const spiralRadius = t * spiralMaxRadius;
+      const spiralX = cx + Math.cos(spiralAngle) * spiralRadius;
+      const spiralY = cy + Math.sin(spiralAngle) * spiralRadius;
+
+      points.push({
+        x: lerp(straightX, spiralX, state.coilAmount),
+        y: lerp(straightY, spiralY, state.coilAmount),
+      });
     }
 
+    const bodyColor = lerpColor(bodyColorDim, bodyColorActive, state.activity);
+
     noFill();
-    stroke(red(cordColor), green(cordColor), blue(cordColor), state.presence * 200);
-    strokeWeight(cfg.cord_weight ?? 3);
+    stroke(red(cordColor), green(cordColor), blue(cordColor), state.presence * 180);
+    strokeWeight(cfg.cord_weight ?? 2.5);
     beginShape();
-    for (const p of points) if (p) vertex(p.x, p.y);
+    for (const p of points) vertex(p.x, p.y);
     endShape();
 
     noStroke();
-    blendMode(ADD);
     for (let i = 0; i < segmentCount; i++) {
       const p = points[i];
-      if (!p) continue;
       const t = i / Math.max(segmentCount - 1, 1); // 0 at head, 1 at tail
-      const size = lerp(headSize, tailSize, t) * lerp(cfg.pulse_size_min ?? 0.85, cfg.pulse_size_max ?? 1.2, pulse);
-      const c = paletteColorAt(colors, wavePos - i * (cfg.color_step ?? 0.35));
-      const alpha = lerp(1, 0.55, t) * lerp(cfg.pulse_alpha_min ?? 0.7, 1, pulse) * state.presence * 230;
-
-      drawingContext.filter = `blur(${cfg.glow_blur ?? 6}px)`;
-      fill(red(c), green(c), blue(c), alpha);
+      const size = lerp(headSize, tailSize, t);
+      const alpha = lerp(1, 0.75, t) * state.presence * 235;
+      fill(red(bodyColor), green(bodyColor), blue(bodyColor), alpha);
       circle(p.x, p.y, size);
-
-      drawingContext.filter = "none";
-      fill(255, 255, 255, alpha * 0.7);
-      circle(p.x - size * 0.22, p.y - size * 0.22, size * 0.3);
     }
-    drawingContext.filter = "none";
-    blendMode(BLEND);
   }
 
   // ---- dev-only simulator ---------------------------------------------------
@@ -834,24 +736,19 @@ const ObjectModule = (() => {
     simulatedMarkerId = simulatedMarkerId === id ? null : id;
   }
 
+  // Real detections carry w/h (box aspect ratio -> coiled/stretched pose,
+  // see drawSegmentedLightWave), which the mouse alone can't express — so
+  // synthesize a slow, continuous cycle through square (coiled) and both
+  // wide and tall elongated (stretched, both orientations) box shapes, to
+  // exercise that whole range while tuning without a live camera.
   function updateSimulator() {
     if (!DEV_SIMULATOR || simulatedMarkerId === null) return;
     if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) return;
-    handleMessage({ markers: [{ marker_id: simulatedMarkerId, x: mouseX / width, y: mouseY / height }] });
-  }
-
-  function drawDevOverlay() {
-    if (!DEV_SIMULATOR) return;
-    push();
-    noStroke();
-    fill(0, 0, 0, 160);
-    rect(10, 64, 460, 32, 6);
-    fill(255);
-    textSize(13);
-    textFont("monospace");
-    const active = simulatedMarkerId === null ? "none" : simulatedMarkerId;
-    text(`object sim: keys 0-4 toggle a mouse-driven marker (active: ${active})`, 20, 85);
-    pop();
+    const cycle = Math.sin(millis() * 0.0002); // -1 tall .. 0 square .. +1 wide
+    const base = 0.12;
+    const w = base * (1 + Math.max(cycle, 0) * 2.5);
+    const h = base * (1 + Math.max(-cycle, 0) * 2.5);
+    handleMessage({ markers: [{ marker_id: simulatedMarkerId, x: mouseX / width, y: mouseY / height, w, h }] });
   }
 
   return { handleMessage, update, draw, handleDevKey };

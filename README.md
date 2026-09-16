@@ -222,25 +222,31 @@ version (`nvidia-smi`) — e.g. for CUDA 13.x:
 .venv/Scripts/python.exe -m pip install --index-url https://download.pytorch.org/whl/cu130 --force-reinstall --no-deps torch torchvision
 ```
 
-**Result** (RTX 4060 laptop GPU, 77 epochs to early-stop): test-set mAP50 =
-**0.963**, mAP50-95 = **0.888**, ~8.5ms/image inference — comfortably
+**Result** (RTX 4060 laptop GPU, 100 epochs, no early-stop): test-set mAP50 =
+**0.984**, mAP50-95 = **0.914**, ~8ms/image inference — comfortably
 real-time for the live camera loop.
 
 | Class | mAP50 | Precision | Recall |
 |---|---|---|---|
-| pink_pop_it | 0.995 | 0.984 | 1.00 |
-| blue_green_pop_it | 0.995 | 0.983 | 1.00 |
-| blue_red_pop_it | 0.995 | 1.00 | 0.99 |
-| noomi_squeezibo_cat | 0.995 | 0.960 | 1.00 |
-| caterpillar | 0.835 | 0.901 | 0.784 |
+| pink_pop_it | 0.995 | 0.974 | 1.00 |
+| blue_green_pop_it | 0.995 | 0.970 | 1.00 |
+| blue_red_pop_it | 0.995 | 1.00 | 1.00 |
+| noomi_squeezibo_cat | 0.995 | 0.966 | 1.00 |
+| caterpillar | 0.942 | 0.938 | 0.973 |
 
-Caterpillar is the one weak spot — a thin, floppy, beaded item that coils
-into much more varied silhouettes than the other four (round pop-its, a
-compact plush), so it's a genuinely harder shape to localize consistently
-rather than a labeling issue. Precision is still solid (few false
-positives); the risk is more the occasional missed detection or loose box.
-Being tracked as a candidate for more training data if it proves flaky in
-practice, rather than pre-emptively fixed against an offline metric.
+Caterpillar was the one weak spot (mAP50 0.835, recall 0.784) — a thin,
+floppy, beaded item that coils into much more varied silhouettes than the
+other four (round pop-its, a compact plush), reported in practice as both
+occasional missed detections and false positives. Manually re-drawing every
+box in `raw/caterpillar/` (359 images) closed most of the gap (mAP50 0.942,
+recall 0.973), so it was more of a labeling-quality issue than the shape
+variance suggested. That relabel-and-retrain also caught a real bug worth
+noting: Ultralytics' `labels.cache` is keyed on a hash of file **sizes**, not
+content, and this dataset's fixed-width label formatting plus deterministic
+re-encoded images kept the hash unchanged across the relabel — so the first
+retrain silently trained on the stale pre-relabel cache. `prepare_dataset.py`
+now deletes the three `labels.cache` files on every run so this can't
+recur.
 
 At inference, `ObjectRecognitionDetector` also keeps only the
 highest-confidence detection per class per frame — Ultralytics' own
