@@ -1,18 +1,14 @@
 // Phase 2 — Object recognition rendering.
 // Renders per-marker visuals (see config.objects[marker_id] in
 // content_config.json) in response to {"modality": "object", "markers": [
-// {marker_id, x, y, w, h}, ...]} messages from
-// backend/modules/object_recognition.py — a YOLO11s model fine-tuned on the
-// 5 real items, marker_id being its predicted class id (0-4, matching
-// content_config.json's marker_0..marker_4 1:1) — where x/y/w/h are the
-// detection box's centre and size, normalised [0,1] (x/y mirroring
-// gesture.js's face_landmarks convention). No angle: a bounding-box
-// detector doesn't produce rotation the way the ArUco detector this
-// replaced did; every visual below already treats angle as optional and
-// degrades to translation-only reactivity without it. w/h, unlike angle,
-// IS reliably produced every frame — marker_4's caterpillar visual reads
-// its aspect ratio as a coiled-vs-stretched pose proxy, see
-// drawSegmentedLightWave below.
+// {marker_id, x, y}, ...]} messages from backend/modules/object_recognition.py
+// — a YOLO11s model fine-tuned on the 5 real items, marker_id being its
+// predicted class id (0-4, matching content_config.json's marker_0..marker_4
+// 1:1) — where x/y are normalised [0,1] mirroring gesture.js's
+// face_landmarks convention. No angle: a bounding-box detector doesn't
+// produce rotation the way the ArUco detector this replaced did; every
+// visual below already treats angle as optional and degrades to
+// translation-only reactivity without it.
 //
 // The DEV_SIMULATOR block at the bottom drives this from the mouse instead
 // of real detections, for tuning visuals independently of camera/lighting/
@@ -43,7 +39,6 @@ const ObjectModule = (() => {
   const PRESENCE_EASE_OUT = 0.06;
   const MARKER_TIMEOUT_MS = 250; // no sighting within this long reads as "gone", not a blip
   const HISTORY_RETAIN_MS = 1200; // comfortably longer than any visual's max chain lag
-  const DEFAULT_NORM_BOX_SIZE = 0.12; // fallback w/h (normalised) for messages that omit it, e.g. the dev simulator
 
   function getOrCreateState(id) {
     let state = markers.get(id);
@@ -64,11 +59,11 @@ const ObjectModule = (() => {
         lastAffirmationText: null,
         nextBlinkAt: undefined, // simple_cat_animation
         blinkStart: -Infinity,
-        smoothW: null, // segmented_light_wave — eased box width/height, canvas px
-        smoothH: null,
-        coilAmount: 0, // segmented_light_wave — eased 0 (stretched out) .. 1 (coiled up)
-        orientation: 0, // segmented_light_wave — eased radians, horizontal (0) .. vertical (HALF_PI)
+        grains: null, // segmented_light_wave — fixed cluster of grain offsets, generated once
+        rollPhase: 0, // segmented_light_wave — eased brightness-wave phase travelling through the cluster
         activity: 0, // segmented_light_wave — eased 0 (still) .. 1 (being handled)
+        grainTrackX: null, // segmented_light_wave — own, faster-tracking position (see drawSegmentedLightWave)
+        grainTrackY: null,
       };
       markers.set(id, state);
     }
@@ -79,14 +74,7 @@ const ObjectModule = (() => {
     const now = millis();
     for (const m of msg.markers ?? []) {
       const state = getOrCreateState(m.marker_id);
-      state.history.push({
-        x: m.x * width,
-        y: m.y * height,
-        angle: m.angle ?? null,
-        w: (m.w ?? DEFAULT_NORM_BOX_SIZE) * width,
-        h: (m.h ?? DEFAULT_NORM_BOX_SIZE) * height,
-        t: now,
-      });
+      state.history.push({ x: m.x * width, y: m.y * height, angle: m.angle ?? null, t: now });
       state.lastSeen = now;
     }
   }
@@ -107,13 +95,9 @@ const ObjectModule = (() => {
         if (state.smoothX === null) {
           state.smoothX = latest.x;
           state.smoothY = latest.y;
-          state.smoothW = latest.w;
-          state.smoothH = latest.h;
         } else {
           state.smoothX += (latest.x - state.smoothX) * 0.2;
           state.smoothY += (latest.y - state.smoothY) * 0.2;
-          state.smoothW += (latest.w - state.smoothW) * 0.2;
-          state.smoothH += (latest.h - state.smoothH) * 0.2;
         }
       }
 
@@ -421,6 +405,7 @@ const ObjectModule = (() => {
       state.lastAffirmationText = pick;
       state.affirmationShownAt = now;
       state.lastAffirmationAt = now;
+      SensoryAudio.playMeow(cfg.meow_volume ?? 0.6);
     }
     state.wasSqueezed = isSqueezed;
 
@@ -589,17 +574,17 @@ const ObjectModule = (() => {
 
     push();
     translate(state.smoothX, state.smoothY - (cfg.bubble_offset_y ?? 60));
-    textSize(cfg.bubble_text_size ?? 19);
+    textSize(cfg.bubble_text_size ?? 24);
     textFont("sans-serif");
     textAlign(CENTER, CENTER);
-    const padX = 20;
-    const w = Math.min(textWidth(text_) + padX * 2, 400);
+    const padX = 26;
+    const w = Math.min(textWidth(text_) + padX * 2, 520);
 
     noStroke();
     fill(red(bubbleColor), green(bubbleColor), blue(bubbleColor), alpha * state.presence * 235);
     rectMode(CENTER);
-    rect(0, 0, w, 44, 18);
-    triangle(-10, 20, 10, 20, 0, 35);
+    rect(0, 0, w, 58, 24);
+    triangle(-13, 27, 13, 27, 0, 46);
 
     fill(red(textColor), green(textColor), blue(textColor), alpha * state.presence * 255);
     text(text_, 0, 0, w - padX);
@@ -608,114 +593,140 @@ const ObjectModule = (() => {
 
   // ---- marker_4: segmented_light_wave (Hand Caterpillar Fidget) -----------
   //
-  // Grounded in how this specific toy is actually handled — bunched into a
-  // compact coil in the palm, or stretched out long — rather than carried
-  // around the frame, plus a deliberately low-complexity, non-cycling
-  // response (Snoezelen/multi-sensory-environment design principles;
-  // Mostafa's ASPECTSS index) after an earlier bead-necklace-with-
-  // travelling-rainbow version read as too busy for the intended audience.
+  // "Granular roll": a fixed field of soft grains covers the ENTIRE canvas
+  // (state.grains, see generateGrainField) — a calm, near-invisible ambient
+  // texture at rest, sensory-room-style, rather than a small indicator that
+  // tracks the object like a cursor. Grains within influenceRadius of the
+  // caterpillar's own tracked position brighten in a rolling sequence,
+  // falling off with distance — so the field reads as responding TO the
+  // object at its actual location (contingency stays legible: this
+  // brightened because of what's happening right here), not as a generic
+  // whole-screen shimmer unrelated to it. Same falloff shape as
+  // drawAmbientWaveField's push-radius above, adapted to brightening grains
+  // instead of displacing rings.
   //
-  // Two real, sensed signals drive it, and nothing else:
-  //   - shape: the detection box's own aspect ratio (state.smoothW/H) is a
-  //     direct, distance-invariant proxy for coiled-vs-stretched — moving
-  //     the toy closer/further scales both box dimensions together, but
-  //     bunching or extending it changes their RATIO, which coilAmount
-  //     below reads. This replaces the previous version's angular-speed
-  //     "twist energy" term, which — honestly — never received real data:
-  //     the bounding-box detector this module runs on has no orientation
-  //     output, so angle was always null and that term was silently
-  //     always zero, even though twisting/coiling in place is close to how
-  //     this toy is actually fidgeted with.
-  //   - activity: recentSpeed (translation) alone, eased slowly in both
-  //     directions so it reads as settling, not reacting.
-  // coilAmount, orientation, and activity are all eased on a slow,
-  // multi-frame time constant (not the per-message smoothing above) so the
-  // body visibly settles into a new pose/brightness rather than snapping —
-  // a coiled or stretched toy doesn't change shape instantly, and neither
-  // should its reflection.
+  // Grounded in crossmodal-correspondence research (Spence, 2011,
+  // "Crossmodal correspondences: A tutorial review"): texture and rhythm are
+  // amodal qualities that transfer between touch and sight without either
+  // channel needing to resemble the other, so nothing here tries to redraw
+  // the toy's silhouette or pose the way an earlier line/spiral-morphing
+  // version did.
   //
-  // The body is one continuous curve, blended by coilAmount between two
-  // templates sampled at the same t values — a gentle straight line
-  // (stretched) and an Archimedean spiral (coiled) — so every in-between
-  // coilAmount is a smooth morph, not a swap between two unrelated
-  // drawings. Colour never cycles: a single hue's brightness eases toward
-  // "active" or "dim" with state.activity, so intensity — not hue, and not
-  // a periodic pulse — is the only thing handling changes, deliberately
-  // avoiding anything that could read as flashing.
+  // Only one real signal drives the roll: recentSpeed (translation), eased
+  // into state.activity with a faster attack than decay so it reads as
+  // settling rather than reacting. It controls both how fast the roll
+  // travels and how sharply its brightness is focused within the influence
+  // radius — calm holds a narrow, slow-moving highlight; active handling
+  // broadens it and speeds it up. Intensity and tempo are the only things
+  // that ever change — never hue-cycling, never a shape swap.
   function drawSegmentedLightWave(state, cfg) {
-    if (state.history.length === 0 || state.smoothW === null) return;
-    const segmentCount = cfg.segment_count ?? 9;
-    const headSize = cfg.head_size ?? 22;
-    const tailSize = cfg.tail_size ?? 12;
-    const cordColor = color(cfg.cord_color ?? "#1a1a1a");
-    const bodyColorDim = color(cfg.body_color_dim ?? "#3E6B5C");
-    const bodyColorActive = color(cfg.body_color_active ?? "#7FD9B0");
+    if (state.presence < 0.01 || state.history.length === 0) return;
+    if (!state.grains) state.grains = generateGrainField(cfg.grain_count ?? 220, cfg.grain_min_spacing_px ?? 28);
 
-    // ---- shape: coiled (compact box) <-> stretched (elongated box) -------
-    const boxMax = Math.max(state.smoothW, state.smoothH);
-    const boxMin = Math.min(state.smoothW, state.smoothH);
-    const elongation = boxMax > 0 ? 1 - boxMin / boxMax : 0; // 0 square/compact .. 1 very elongated
-    const coilTarget = constrain(1 - elongation, 0, 1);
-    const coilEase = cfg.coil_ease ?? 0.04; // slow — a settle, not a snap
-    state.coilAmount += (coilTarget - state.coilAmount) * coilEase;
+    // Tracks the latest raw detection directly, on its own (faster) ease
+    // rate, instead of the shared state.smoothX/Y every other marker visual
+    // uses (see update() above) — the highlight needs to sit right where
+    // the caterpillar physically is without lagging behind quick moves.
+    const latest = state.history[state.history.length - 1];
+    const trackEase = cfg.position_ease ?? 0.45;
+    if (state.grainTrackX === null) {
+      state.grainTrackX = latest.x;
+      state.grainTrackY = latest.y;
+    } else {
+      state.grainTrackX += (latest.x - state.grainTrackX) * trackEase;
+      state.grainTrackY += (latest.y - state.grainTrackY) * trackEase;
+    }
 
-    // Which way the box is elongated (wide vs tall) orients the stretched
-    // template only — the coiled template has no preferred axis, so this
-    // has no visible effect once coilAmount is high anyway.
-    const orientationTarget = state.smoothW >= state.smoothH ? 0 : HALF_PI;
-    state.orientation += (orientationTarget - state.orientation) * coilEase;
-
-    // ---- activity: how much it's currently being moved -------------------
     const activityTarget = constrain(recentSpeed(state.history) / (cfg.speed_ref ?? 0.5), 0, 1);
     const activityEase =
       activityTarget > state.activity ? cfg.activity_ease_up ?? 0.05 : cfg.activity_ease_down ?? 0.02;
     state.activity += (activityTarget - state.activity) * activityEase;
 
-    const bodyLength = cfg.body_length ?? Math.max(boxMax, 60) * 1.4;
-    const spiralTurns = cfg.spiral_turns ?? 1.5;
-    const spiralMaxRadius = cfg.spiral_max_radius ?? bodyLength * 0.3;
+    const rollSpeed = (cfg.roll_speed_min ?? 0.00025) + state.activity * (cfg.roll_speed_range ?? 0.0022);
+    state.rollPhase += deltaTime * rollSpeed;
 
-    const cx = state.smoothX;
-    const cy = state.smoothY;
-    const cosO = Math.cos(state.orientation);
-    const sinO = Math.sin(state.orientation);
+    const influenceRadius = cfg.influence_radius ?? 260;
+    const falloffSharpness = cfg.falloff_sharpness ?? 1.6;
+    const waveFreq = cfg.wave_freq ?? 6;
+    const sharpness = (cfg.pulse_sharpness_base ?? 3) + (1 - state.activity) * (cfg.pulse_sharpness_range ?? 4);
+    const ambientBrightness = cfg.ambient_brightness ?? 0.05;
+    const brightRange = (cfg.brightness_range ?? 0.35) + state.activity * (cfg.brightness_active_range ?? 0.65);
+    const sizeMin = cfg.grain_size_min ?? 6;
+    const sizeMax = cfg.grain_size_max ?? 11;
+    const minAlpha = cfg.min_alpha ?? 18;
+    const colorDim = color(cfg.body_color_dim ?? "#3E6B5C");
+    const colorActive = color(cfg.body_color_active ?? "#7FD9B0");
 
-    const points = [];
-    for (let i = 0; i < segmentCount; i++) {
-      const t = i / Math.max(segmentCount - 1, 1); // 0 head .. 1 tail
-      const along = (t - 0.5) * bodyLength;
-      const straightX = cx + cosO * along;
-      const straightY = cy + sinO * along;
-
-      const spiralAngle = t * spiralTurns * TWO_PI;
-      const spiralRadius = t * spiralMaxRadius;
-      const spiralX = cx + Math.cos(spiralAngle) * spiralRadius;
-      const spiralY = cy + Math.sin(spiralAngle) * spiralRadius;
-
-      points.push({
-        x: lerp(straightX, spiralX, state.coilAmount),
-        y: lerp(straightY, spiralY, state.coilAmount),
-      });
-    }
-
-    const bodyColor = lerpColor(bodyColorDim, bodyColorActive, state.activity);
-
-    noFill();
-    stroke(red(cordColor), green(cordColor), blue(cordColor), state.presence * 180);
-    strokeWeight(cfg.cord_weight ?? 2.5);
-    beginShape();
-    for (const p of points) vertex(p.x, p.y);
-    endShape();
+    const mx = state.grainTrackX;
+    const my = state.grainTrackY;
+    const cosP = Math.cos(state.rollPhase);
+    const sinP = Math.sin(state.rollPhase);
 
     noStroke();
-    for (let i = 0; i < segmentCount; i++) {
-      const p = points[i];
-      const t = i / Math.max(segmentCount - 1, 1); // 0 at head, 1 at tail
-      const size = lerp(headSize, tailSize, t);
-      const alpha = lerp(1, 0.75, t) * state.presence * 235;
-      fill(red(bodyColor), green(bodyColor), blue(bodyColor), alpha);
-      circle(p.x, p.y, size);
+    blendMode(ADD);
+    for (const g of state.grains) {
+      const x = g.fx * width;
+      const y = g.fy * height;
+      const dx = x - mx;
+      const dy = y - my;
+      const d = Math.sqrt(dx * dx + dy * dy);
+
+      // Grains outside the influence radius sit at the flat ambient
+      // baseline — skipping the wave math for them is also a real
+      // shortcut, since most of a full-canvas field falls outside it.
+      let t = ambientBrightness;
+      if (d < influenceRadius) {
+        const falloff = Math.pow(1 - d / influenceRadius, falloffSharpness);
+        // Projecting onto a rotating axis anchored at the marker's OWN
+        // current position (not a fixed field-wide origin) gives a
+        // brightness band that sweeps outward from wherever the object
+        // actually is right now, following it as it moves.
+        const proj = dx * cosP + dy * sinP;
+        const wave = 0.5 + 0.5 * Math.sin((proj / influenceRadius) * waveFreq);
+        const pulse = Math.pow(wave, sharpness);
+        t = constrain(ambientBrightness + falloff * pulse * brightRange, 0, 1);
+      }
+
+      const size = lerp(sizeMin, sizeMax, g.sizeT) * (0.85 + t * 0.3);
+      const c = lerpColor(colorDim, colorActive, t);
+      const alpha = state.presence * lerp(minAlpha, 235, t);
+
+      // Two-pass soft glow (wide+faint, then core+bright) instead of a
+      // per-grain blur filter — cheap for one shape, costly repeated once
+      // per grain per frame (same tradeoff as the ambient-field renderers
+      // elsewhere in this file, now doubly true at full-canvas grain counts).
+      fill(red(c), green(c), blue(c), alpha * 0.35);
+      circle(x, y, size * 2.2);
+      fill(red(c), green(c), blue(c), alpha);
+      circle(x, y, size);
     }
+    blendMode(BLEND);
+  }
+
+  // A scatter of grain positions covering the entire canvas, stored as
+  // fractions of width/height (not absolute pixels) so the field stays
+  // correctly laid out if the canvas is ever resized. Simple rejection
+  // sampling keeps grains from overlapping while staying organic rather
+  // than a grid. Generated once per marker and held fixed — the field
+  // itself never moves; only which grains brighten does.
+  function generateGrainField(count, minSpacingPx) {
+    const grains = [];
+    let tries = 0;
+    const maxTries = count * 40;
+    while (grains.length < count && tries < maxTries) {
+      tries++;
+      const x = Math.random() * width;
+      const y = Math.random() * height;
+      let ok = true;
+      for (const g of grains) {
+        if (dist(g.fx * width, g.fy * height, x, y) < minSpacingPx) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) grains.push({ fx: x / width, fy: y / height, sizeT: Math.random() });
+    }
+    return grains;
   }
 
   // ---- dev-only simulator ---------------------------------------------------
@@ -736,19 +747,10 @@ const ObjectModule = (() => {
     simulatedMarkerId = simulatedMarkerId === id ? null : id;
   }
 
-  // Real detections carry w/h (box aspect ratio -> coiled/stretched pose,
-  // see drawSegmentedLightWave), which the mouse alone can't express — so
-  // synthesize a slow, continuous cycle through square (coiled) and both
-  // wide and tall elongated (stretched, both orientations) box shapes, to
-  // exercise that whole range while tuning without a live camera.
   function updateSimulator() {
     if (!DEV_SIMULATOR || simulatedMarkerId === null) return;
     if (mouseX < 0 || mouseX > width || mouseY < 0 || mouseY > height) return;
-    const cycle = Math.sin(millis() * 0.0002); // -1 tall .. 0 square .. +1 wide
-    const base = 0.12;
-    const w = base * (1 + Math.max(cycle, 0) * 2.5);
-    const h = base * (1 + Math.max(-cycle, 0) * 2.5);
-    handleMessage({ markers: [{ marker_id: simulatedMarkerId, x: mouseX / width, y: mouseY / height, w, h }] });
+    handleMessage({ markers: [{ marker_id: simulatedMarkerId, x: mouseX / width, y: mouseY / height }] });
   }
 
   return { handleMessage, update, draw, handleDevKey };

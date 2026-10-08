@@ -1,5 +1,5 @@
 {
-  "active_modality": "object",
+  "active_modality": "gesture",
   "proxemic": {
     "underlay": {
       "color": "#8FD8E8",
@@ -159,15 +159,24 @@
       "item": "Hand Caterpillar Fidget (beaded, silver-on-black-cord)",
       "visual": "segmented_light_wave",
       "sound": null,
-      "segment_count": 9,
-      "head_size": 22,
-      "tail_size": 12,
-      "cord_color": "#1a1a1a",
-      "cord_weight": 2.5,
+      "grain_count": 220,
+      "grain_min_spacing_px": 28,
+      "grain_size_min": 8,
+      "grain_size_max": 14,
+      "influence_radius": 300,
+      "falloff_sharpness": 1.6,
+      "ambient_brightness": 0.14,
+      "min_alpha": 48,
       "body_color_dim": "#3E6B5C",
-      "body_color_active": "#7FD9B0",
-      "coil_ease": 0.04,
-      "spiral_turns": 1.5,
+      "body_color_active": "#A0F0C4",
+      "roll_speed_min": 0.00025,
+      "roll_speed_range": 0.0022,
+      "wave_freq": 6,
+      "pulse_sharpness_base": 3,
+      "pulse_sharpness_range": 4,
+      "brightness_range": 0.55,
+      "brightness_active_range": 0.95,
+      "position_ease": 0.45,
       "speed_ref": 0.5,
       "activity_ease_up": 0.05,
       "activity_ease_down": 0.02
@@ -189,8 +198,8 @@
     "wave_bump_arc_spacing": 42,
     "wave_bump_sharpness": 2.2,
     "glow_blur": 3,
-    "stroke_weight": 2,
-    "stroke_alpha": 90
+    "stroke_weight": 2.5,
+    "stroke_alpha": 130
   },
   "gestures": {
     "face_underlay": {

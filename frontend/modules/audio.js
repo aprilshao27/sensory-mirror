@@ -58,5 +58,41 @@ const SensoryAudio = (() => {
     playTone({ freq: 1046.5, duration: 0.6, type: "triangle", startGain: 0.15, delay: 0.17 });
   }
 
-  return { playChime, playCheer };
+  // Cat-pet affirmation payoff: a real recorded meow rather than a synth
+  // tone. "Cat Meow" by Mafon2, CC0 —
+  // https://freesound.org/people/Mafon2/sounds/436541/ (Freesound HQ
+  // preview mp3). Decoded once on first use through the same context the
+  // tones use, so it's subject to the same unlock-on-first-gesture rule.
+  let meowBuffer = null;
+  let meowLoading = null;
+  function loadMeow() {
+    if (!meowLoading) {
+      meowLoading = fetch("assets/sounds/meow.mp3")
+        .then((res) => res.arrayBuffer())
+        .then((data) => getContext().decodeAudioData(data))
+        .then((buf) => (meowBuffer = buf))
+        .catch((err) => console.warn("meow.mp3 failed to load", err));
+    }
+    return meowLoading;
+  }
+
+  function playMeow(volume = 0.6) {
+    const play = () => {
+      if (!meowBuffer) return;
+      const audioCtx = getContext();
+      const src = audioCtx.createBufferSource();
+      const gain = audioCtx.createGain();
+      src.buffer = meowBuffer;
+      gain.gain.value = volume;
+      src.connect(gain).connect(audioCtx.destination);
+      src.start();
+    };
+    if (meowBuffer) play();
+    else loadMeow().then(play);
+  }
+
+  // Preload so the first squeeze doesn't wait on the fetch.
+  loadMeow();
+
+  return { playChime, playCheer, playMeow };
 })();
